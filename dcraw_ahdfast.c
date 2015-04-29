@@ -3,6 +3,7 @@
 #include <x86intrin.h>
 #include <inttypes.h>
 #include <time.h>
+#include <pthread.h>
 #if !defined(ushort)
 #define ushort unsigned short
 #endif
@@ -27,11 +28,104 @@ extern const unsigned filters;
 
 extern const int verbose;
 #define _(x) x
-void merror (void *ptr, const char *where);
 void border_interpolate (int border);
 
 void cielab (ushort rgb[3], short lab[3]);
 
+void ahd_interpolate_tile(int top,int left, char * buffer)
+{
+    int i, j, row, col, tr, tc, c, d, val, hm[2];
+    static const int dir[4] = { -1, 1, -TS, TS };
+    unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
+    ushort (*rgb)[TS][TS][3], (*rix)[3], (*pix)[4];
+    short (*lab)[TS][TS][3], (*lix)[3];
+    char (*homo)[TS][TS];
+    rgb  = (ushort(*)[TS][TS][3])buffer;
+    lab  = (short (*)[TS][TS][3])(buffer + 12*TS*TS);
+    homo = (char  (*)[TS][TS])(buffer + 24*TS*TS);
+
+
+
+/*  Interpolate green horizontally and vertically:		*/
+    for (row=top; row < top+TS && row < height-2; row++) {
+        col = left + (FC(row,left) & 1);
+        for (c = FC(row,col); col < left+TS && col < width-2; col+=2) {
+            pix = image + row*width+col;
+            val = ((pix[-1][1] + pix[0][c] + pix[1][1]) * 2
+                   - pix[-2][c] - pix[2][c]) >> 2;
+            rgb[0][row-top][col-left][1] = ULIM(val,pix[-1][1],pix[1][1]);
+            val = ((pix[-width][1] + pix[0][c] + pix[width][1]) * 2
+                   - pix[-2*width][c] - pix[2*width][c]) >> 2;
+            rgb[1][row-top][col-left][1] = ULIM(val,pix[-width][1],pix[width][1]);
+        }
+    }
+/*  Interpolate red and blue, and convert to CIELab:		*/
+    for (d=0; d < 2; d++)
+        for (row=top+1; row < top+TS-1 && row < height-3; row++)
+            for (col=left+1; col < left+TS-1 && col < width-3; col++) {
+                pix = image + row*width+col;
+                rix = &rgb[d][row-top][col-left];
+                lix = &lab[d][row-top][col-left];
+                if ((c = 2 - FC(row,col)) == 1) {
+                    c = FC(row+1,col);
+                    val = pix[0][1] + (( pix[-1][2-c] + pix[1][2-c]
+                                         - rix[-1][1] - rix[1][1] ) >> 1);
+                    rix[0][2-c] = CLIP(val);
+                    val = pix[0][1] + (( pix[-width][c] + pix[width][c]
+                                         - rix[-TS][1] - rix[TS][1] ) >> 1);
+                } else
+                    val = rix[0][1] + (( pix[-width-1][c] + pix[-width+1][c]
+                                         + pix[+width-1][c] + pix[+width+1][c]
+                                         - rix[-TS-1][1] - rix[-TS+1][1]
+                                         - rix[+TS-1][1] - rix[+TS+1][1] + 1) >> 2);
+                rix[0][c] = CLIP(val);
+                c = FC(row,col);
+                rix[0][c] = pix[0][c];
+                cielab (rix[0],lix[0]);
+            }
+/*  Build homogeneity maps from the CIELab images:		*/
+    memset (homo, 0, 2*TS*TS);
+    for (row=top+2; row < top+TS-2 && row < height-4; row++) {
+        tr = row-top;
+        for (col=left+2; col < left+TS-2 && col < width-4; col++) {
+            tc = col-left;
+            for (d=0; d < 2; d++) {
+                lix = &lab[d][tr][tc];
+                for (i=0; i < 4; i++) {
+                    ldiff[d][i] = ABS(lix[0][0]-lix[dir[i]][0]);
+                    abdiff[d][i] = SQR(lix[0][1]-lix[dir[i]][1])
+                                   + SQR(lix[0][2]-lix[dir[i]][2]);
+                }
+            }
+            leps = MIN(MAX(ldiff[0][0],ldiff[0][1]),
+                       MAX(ldiff[1][2],ldiff[1][3]));
+            abeps = MIN(MAX(abdiff[0][0],abdiff[0][1]),
+                        MAX(abdiff[1][2],abdiff[1][3]));
+            for (d=0; d < 2; d++)
+                for (i=0; i < 4; i++)
+                    if (ldiff[d][i] <= leps && abdiff[d][i] <= abeps)
+                        homo[d][tr][tc]++;
+
+
+        }
+    }
+/*  Combine the most homogenous pixels for the final result:	*/
+    for (row=top+3; row < top+TS-3 && row < height-5; row++) {
+        tr = row-top;
+        for (col=left+3; col < left+TS-3 && col < width-5; col++) {
+            tc = col-left;
+            for (d=0; d < 2; d++)
+                for (hm[d]=0, i=tr-1; i <= tr+1; i++)
+                    for (j=tc-1; j <= tc+1; j++)
+                        hm[d] += homo[d][i][j];
+            if (hm[0] != hm[1])
+                FORC3 image[row*width+col][c] = rgb[hm[1] > hm[0]][tr][tc][c];
+            else
+                FORC3 image[row*width+col][c] =
+                    (rgb[0][tr][tc][c] + rgb[1][tr][tc][c]) >> 1;
+        }
+    }
+}
 
 
 /*
@@ -53,14 +147,36 @@ static uint64_t timediff(const struct timespec * start)
     }
     return temp.tv_sec*1000000 + temp.tv_nsec/1000;
 }
+
+#define NUM_CHUNKS 4
+void * ahd_interpolate_worker(void*args) {
+    signed left;
+    unsigned top;
+    unsigned chunk = (unsigned)(uintptr_t)args;
+    char * buffer = (char *) malloc (26*TS*TS);
+
+    if (!buffer) {
+        fprintf(stderr, "memory alloc error, %s\n",__FUNCTION__);
+        return NULL;
+    }
+
+    if (chunk==0) top=2;
+    else top = height/NUM_CHUNKS * chunk;
+
+    for (; top < height/NUM_CHUNKS*(chunk+1); top += TS-6)
+        for (left=2; left < width-5; left += TS-6)
+            ahd_interpolate_tile(top,left,buffer);
+
+    free (buffer);
+    return NULL;
+}
+
 void ahd_interpolate_fast(void)
 {
-    int i, j, top, left, row, col, tr, tc, c, d, val, hm[2];
-    static const int dir[4] = { -1, 1, -TS, TS };
-    unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
-    ushort (*rgb)[TS][TS][3], (*rix)[3], (*pix)[4];
-    short (*lab)[TS][TS][3], (*lix)[3];
-    char (*homo)[TS][TS], *buffer;
+#ifdef THREADED
+    pthread_t th[NUM_CHUNKS-1];
+    pthread_attr_t tattr;
+#endif
     struct timespec start;
 
     if (verbose) fprintf (stderr,_("AHD interpolation...\n"));
@@ -68,95 +184,24 @@ void ahd_interpolate_fast(void)
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
     cielab (0,0);
     border_interpolate(5);
-    buffer = (char *) malloc (26*TS*TS);
-    merror (buffer, "ahd_interpolate()");
-    rgb  = (ushort(*)[TS][TS][3])buffer;
-    lab  = (short (*)[TS][TS][3])(buffer + 12*TS*TS);
-    homo = (char  (*)[TS][TS])(buffer + 24*TS*TS);
 
-    for (top=2; top < height-5; top += TS-6)
-        for (left=2; left < width-5; left += TS-6) {
+#ifdef THREADED
+    pthread_attr_init(&tattr);
+    pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_JOINABLE);
+#endif
+    for(unsigned i=0; i<NUM_CHUNKS-1; i++) {
+#ifdef THREADED
+        pthread_create(&th[i], &tattr, ahd_interpolate_worker, (void*)(uintptr_t)i);
+#else
+        ahd_interpolate_worker((void*)(uintptr_t)i);
+#endif
+    }
+    ahd_interpolate_worker((void*)NUM_CHUNKS-1);
+#ifdef THREADED
+    pthread_attr_destroy(&tattr);
+    for(unsigned i=0; i<(sizeof th/sizeof th[0]) -1; i++)
+        pthread_join(th[i],NULL);
+#endif
 
-/*  Interpolate green horizontally and vertically:    */
-            for (row=top; row < top+TS && row < height-2; row++) {
-                col = left + (FC(row,left) & 1);
-                for (c = FC(row,col); col < left+TS && col < width-2; col+=2) {
-                    pix = image + row*width+col;
-                    val = ((pix[-1][1] + pix[0][c] + pix[1][1]) * 2
-                           - pix[-2][c] - pix[2][c]) >> 2;
-                    rgb[0][row-top][col-left][1] = ULIM(val,pix[-1][1],pix[1][1]);
-                    val = ((pix[-width][1] + pix[0][c] + pix[width][1]) * 2
-                           - pix[-2*width][c] - pix[2*width][c]) >> 2;
-                    rgb[1][row-top][col-left][1] = ULIM(val,pix[-width][1],pix[width][1]);
-                }
-            }
-/*  Interpolate red and blue, and convert to CIELab:    */
-            for (d=0; d < 2; d++)
-                for (row=top+1; row < top+TS-1 && row < height-3; row++)
-                    for (col=left+1; col < left+TS-1 && col < width-3; col++) {
-                        pix = image + row*width+col;
-                        rix = &rgb[d][row-top][col-left];
-                        lix = &lab[d][row-top][col-left];
-                        if ((c = 2 - FC(row,col)) == 1) {
-                            c = FC(row+1,col);
-                            val = pix[0][1] + (( pix[-1][2-c] + pix[1][2-c]
-                                                 - rix[-1][1] - rix[1][1] ) >> 1);
-                            rix[0][2-c] = CLIP(val);
-                            val = pix[0][1] + (( pix[-width][c] + pix[width][c]
-                                                 - rix[-TS][1] - rix[TS][1] ) >> 1);
-                        } else
-                            val = rix[0][1] + (( pix[-width-1][c] + pix[-width+1][c]
-                                                 + pix[+width-1][c] + pix[+width+1][c]
-                                                 - rix[-TS-1][1] - rix[-TS+1][1]
-                                                 - rix[+TS-1][1] - rix[+TS+1][1] + 1) >> 2);
-                        rix[0][c] = CLIP(val);
-                        c = FC(row,col);
-                        rix[0][c] = pix[0][c];
-                        cielab (rix[0],lix[0]);
-                    }
-/*  Build homogeneity maps from the CIELab images:    */
-            memset (homo, 0, 2*TS*TS);
-            for (row=top+2; row < top+TS-2 && row < height-4; row++) {
-                tr = row-top;
-                for (col=left+2; col < left+TS-2 && col < width-4; col++) {
-                    tc = col-left;
-                    for (d=0; d < 2; d++) {
-                        lix = &lab[d][tr][tc];
-                        for (i=0; i < 4; i++) {
-                            ldiff[d][i] = ABS(lix[0][0]-lix[dir[i]][0]);
-                            abdiff[d][i] = SQR(lix[0][1]-lix[dir[i]][1])
-                                           + SQR(lix[0][2]-lix[dir[i]][2]);
-                        }
-                    }
-                    leps = MIN(MAX(ldiff[0][0],ldiff[0][1]),
-                               MAX(ldiff[1][2],ldiff[1][3]));
-                    abeps = MIN(MAX(abdiff[0][0],abdiff[0][1]),
-                                MAX(abdiff[1][2],abdiff[1][3]));
-                    for (d=0; d < 2; d++)
-                        for (i=0; i < 4; i++)
-                            if (ldiff[d][i] <= leps && abdiff[d][i] <= abeps)
-                                homo[d][tr][tc]++;
-                }
-            }
-/*  Combine the most homogenous pixels for the final result:  */
-            for (row=top+3; row < top+TS-3 && row < height-5; row++) {
-                tr = row-top;
-                for (col=left+3; col < left+TS-3 && col < width-5; col++) {
-                    tc = col-left;
-                    for (d=0; d < 2; d++)
-                        for (hm[d]=0, i=tr-1; i <= tr+1; i++)
-                            for (j=tc-1; j <= tc+1; j++)
-                                hm[d] += homo[d][i][j];
-                    if (hm[0] != hm[1])
-                        FORC3 image[row*width+col][c] = rgb[hm[1] > hm[0]][tr][tc][c];
-                    else
-                        FORC3 image[row*width+col][c] =
-                            (rgb[0][tr][tc][c] + rgb[1][tr][tc][c]) >> 1;
-                }
-            }
-        }
-    free (buffer);
     fprintf(stderr, "%15s %12" PRIu64 " us (1926200)\n","runtime",timediff(&start));
-
 }
-
