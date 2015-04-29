@@ -141,7 +141,7 @@ void ahd_interpolate_tile(int top, char * buffer)
 {
     int i, j, row, col, tr, tc, c, d, val, hm[2];
     const int dir[4] = { -1, 1, -width, width };
-    unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
+    __m128i ldiff[2], abdiff[2];
     union hvrgbpix (*rgb)[width] = (union hvrgbpix (*)[width])buffer;
     union hvrgbpix *rix;
     union rgbpix * pix;
@@ -354,27 +354,80 @@ void ahd_interpolate_tile(int top, char * buffer)
         tr = row-top;
         for (col=left+2; col < width-4; col++) {
             tc = col-left;
-            lix = (short(*)[8])&lab[tr][tc].h.c;
-            for (i=0; i < 4; i++) {
-                ldiff[0][i] = ABS(lix[0][0]-lix[dir[i]][0]);
-                abdiff[0][i] = SQR(lix[0][1]-lix[dir[i]][1])
-                               + SQR(lix[0][2]-lix[dir[i]][2]);
-                ldiff[1][i] = ABS(lix[0][0+4]-lix[dir[i]][0+4]);
-                abdiff[1][i] = SQR(lix[0][1+4]-lix[dir[i]][1+4])
-                               + SQR(lix[0][2+4]-lix[dir[i]][2+4]);
-            }
-            leps = MIN(MAX(ldiff[0][0],ldiff[0][1]),
-                       MAX(ldiff[1][2],ldiff[1][3]));
-            abeps = MIN(MAX(abdiff[0][0],abdiff[0][1]),
-                        MAX(abdiff[1][2],abdiff[1][3]));
-            for (d=0; d < 2; d++)
-                homo[d][tr][tc]+=
-                    (ldiff[d][0] <= leps && abdiff[d][0] <= abeps)+
-                    (ldiff[d][1] <= leps && abdiff[d][1] <= abeps)+
-                    (ldiff[d][2] <= leps && abdiff[d][2] <= abeps)+
-                    (ldiff[d][3] <= leps && abdiff[d][3] <= abeps);
+            lix = (short (*)[8])lab[tr][tc].h.c;
+            __m128i lixd0, lix0 =  _mm_lddqu_si128((__m128i*)&(lix[0][0]));
+            __m128i lixdi01,lixi01 = _mm_lddqu_si128((__m128i*)&(lix[dir[0]][0]));
+            __m128i t1 =     _mm_lddqu_si128((__m128i*)&(lix[dir[1]][0]));
+            __m128i lixdi23,lixi23 = _mm_lddqu_si128((__m128i*)&(lix[dir[2]][0]));
+            __m128i t2 =     _mm_lddqu_si128((__m128i*)&(lix[dir[3]][0]));
+            lixdi01 = _mm_unpackhi_epi64(lixi01,t1);
+            lixdi23 = _mm_unpackhi_epi64(lixi23,t2);
+            lixd0 = _mm_unpackhi_epi64(lix0, lix0);
+            lixi01 = _mm_unpacklo_epi64(lixi01,t1);
+            lixi23 = _mm_unpacklo_epi64(lixi23,t2);
+            lix0 = _mm_unpacklo_epi64(lix0, lix0);
+
+            lixi01 = _mm_sub_epi16(lix0, lixi01);
+            lixi01 = _mm_abs_epi16(lixi01);
+            lixi23 = _mm_sub_epi16(lix0, lixi23);
+            lixi23 = _mm_abs_epi16(lixi23);
+
+            lixdi01 = _mm_sub_epi16(lixd0, lixdi01);
+            lixdi01 = _mm_abs_epi16(lixdi01);
+            lixdi23 = _mm_sub_epi16(lixd0, lixdi23);
+            lixdi23 = _mm_abs_epi16(lixdi23);
+
+            ldiff[0] = _mm_unpacklo_epi64(_mm_shuffle_epi32(lixi01, _MM_SHUFFLE(2,0,2,0)), _mm_shuffle_epi32(lixi23, _MM_SHUFFLE(2,0,2,0)));
+            ldiff[0] = _mm_and_si128(ldiff[0], _mm_setr_epi16(0xffff,0,0xffff,0,0xffff,0,0xffff,0));
+            ldiff[1] = _mm_unpacklo_epi64(_mm_shuffle_epi32(lixdi01, _MM_SHUFFLE(2,0,2,0)), _mm_shuffle_epi32(lixdi23, _MM_SHUFFLE(2,0,2,0)));
+            ldiff[1] = _mm_and_si128(ldiff[1], _mm_setr_epi16(0xffff,0,0xffff,0,0xffff,0,0xffff,0));
+
+            lixi01 = _mm_srli_epi64(lixi01,16);
+            lixi01 = _mm_shuffle_epi32(lixi01, _MM_SHUFFLE(0,2,2,0));
+            lixi01 = _mm_cvtepu16_epi32(lixi01);
+            lixi01 = _mm_mullo_epi32(lixi01,lixi01);
+
+            lixi23 = _mm_srli_epi64(lixi23,16);
+            lixi23 = _mm_shuffle_epi32(lixi23, _MM_SHUFFLE(0,2,2,0));
+            lixi23 = _mm_cvtepu16_epi32(lixi23);
+            lixi23 = _mm_mullo_epi32(lixi23,lixi23);
+            abdiff[0] = _mm_hadd_epi32(lixi01,lixi23);
+
+            lixdi01 = _mm_srli_epi64(lixdi01,16);
+            lixdi01 = _mm_shuffle_epi32(lixdi01, _MM_SHUFFLE(0,2,2,0));
+            lixdi01 = _mm_cvtepu16_epi32(lixdi01);
+            lixdi01 = _mm_mullo_epi32(lixdi01,lixdi01);
+
+            lixdi23 = _mm_srli_epi64(lixdi23,16);
+            lixdi23 = _mm_shuffle_epi32(lixdi23, _MM_SHUFFLE(0,2,2,0));
+            lixdi23 = _mm_cvtepu16_epi32(lixdi23);
+            lixdi23 = _mm_mullo_epi32(lixdi23,lixdi23);
+            abdiff[1] = _mm_hadd_epi32(lixdi01,lixdi23);
 
 
+            __m128i t3=_mm_unpacklo_epi32(ldiff[0], abdiff[0]);
+            t2=_mm_unpackhi_epi32(ldiff[1], abdiff[1]);
+            t1=_mm_unpacklo_epi64(t3,t2);
+            t2=_mm_unpackhi_epi64(t3,t2);
+            t3 = _mm_max_epi32(t1,t2); //Ml0, Ma0, Ml1, Ma1
+            t3 = _mm_min_epi32(t3, _mm_shuffle_epi32(t3, _MM_SHUFFLE(0,0,3,2)));
+            t1 = _mm_shuffle_epi32(t3, _MM_SHUFFLE(0,0,0,0)); //leps, leps, leps, leps
+            t2 = _mm_shuffle_epi32(t3, _MM_SHUFFLE(1,1,1,1)); //abeps,abeps,abeps,abeps
+
+            t3 = _mm_or_si128(_mm_cmpgt_epi32(ldiff[0], t1), _mm_cmpgt_epi32(abdiff[0], t2));
+            t3 = _mm_add_epi32(t3, _mm_set_epi32(1,1,1,1));
+
+            t2 = _mm_or_si128(_mm_cmpgt_epi32(ldiff[1], t1), _mm_cmpgt_epi32(abdiff[1], t2));
+            t2 = _mm_add_epi32(t2, _mm_set_epi32(1,1,1,1));
+
+            t3 = _mm_hadd_epi32(t3,t3);
+            t3 = _mm_hadd_epi32(t3,t3);
+
+            t2 = _mm_hadd_epi32(t2,t2);
+            t2 = _mm_hadd_epi32(t2,t2);
+
+            homo[0][tr][tc]+=_mm_extract_epi32(t3,0);
+            homo[1][tr][tc]+=_mm_extract_epi32(t2,0);
         }
     }
 /*  Combine the most homogenous pixels for the final result:  */
