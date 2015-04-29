@@ -1,3 +1,13 @@
+/*
+ dcraw_ahdfast.c  - vectorized & threaded AHD interpolation for dcraw
+ Copyright 2015 by Torbjorn Tyridal, torbjorn a tyridal o no
+
+ This implementation is licensed under GPLv3, see LICENSE
+
+ If you need another license, please contact me at the
+ address specified above.
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <x86intrin.h>

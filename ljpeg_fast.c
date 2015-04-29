@@ -1,3 +1,17 @@
+/*
+ ljpeg_fast.c  - faster jpeg-lossless decoding for dcraw
+ Copyright 2015 by Torbjorn Tyridal, torbjorn a tyridal o no
+
+ This implementation is licensed under GPLv3, see LICENSE
+
+ If you need another license, please contact me at the
+ address specified above.
+
+
+ TODO just about everything.. need to investigate a way
+ to do huff-decoding faster..
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
