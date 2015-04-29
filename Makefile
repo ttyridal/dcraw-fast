@@ -21,7 +21,7 @@ IGNORE_WARNINGS=-Wno-clobbered \
 
 
 
-dcraw: dcraw.o
+dcraw: dcraw.o dcraw_ahdfast.o
 	gcc $(ARCH) -Wall -Wextra -o $@ $^ $(LIBS) $(OPTIM)
 dcraw.o: dcraw.c
 	@gcc -c $(ARCH) -Wall -Wextra $(IGNORE_WARNINGS) $(DEFINES) -DNODEPS $(OPTIM) $<

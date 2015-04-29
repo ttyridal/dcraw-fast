@@ -41,6 +41,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/types.h>
+#include <inttypes.h>
 
 #if defined(DJGPP) || defined(__MINGW32__)
 #define fseeko fseek
@@ -4791,6 +4792,22 @@ void CLASS xtrans_interpolate (int passes)
    Adaptive Homogeneity-Directed interpolation is based on
    the work of Keigo Hirakawa, Thomas Parks, and Paul Lee.
  */
+static uint64_t timediff(const struct timespec * start)
+{
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+	struct timespec temp;
+	if ((end.tv_nsec-start->tv_nsec)<0) {
+		temp.tv_sec = end.tv_sec-start->tv_sec-1;
+		temp.tv_nsec = 1000000000+end.tv_nsec-start->tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec-start->tv_sec;
+		temp.tv_nsec = end.tv_nsec-start->tv_nsec;
+	}
+	return temp.tv_sec*1000000 + temp.tv_nsec/1000;
+}
+void CLASS ahd_interpolate_fast(void);
 void CLASS ahd_interpolate()
 {
   int i, j, top, left, row, col, tr, tc, c, d, val, hm[2];
@@ -4799,9 +4816,11 @@ void CLASS ahd_interpolate()
   ushort (*rgb)[TS][TS][3], (*rix)[3], (*pix)[4];
    short (*lab)[TS][TS][3], (*lix)[3];
    char (*homo)[TS][TS], *buffer;
+  struct timespec start;
 
   if (verbose) fprintf (stderr,_("AHD interpolation...\n"));
 
+  clock_gettime(CLOCK_MONOTONIC, &start);
   cielab (0,0);
   border_interpolate(5);
   buffer = (char *) malloc (26*TS*TS);
@@ -4892,6 +4911,8 @@ void CLASS ahd_interpolate()
       }
     }
   free (buffer);
+  fprintf(stderr, "%15s %12" PRIu64 " us (1926200)\n","runtime",timediff(&start));
+
 }
 #undef TS
 
@@ -9924,7 +9945,7 @@ next:
       else if (filters == 9)
 	xtrans_interpolate (quality*2-3);
       else
-	ahd_interpolate();
+	ahd_interpolate_fast();
     }
     if (mix_green)
       for (colors=3, i=0; i < height*width; i++)
