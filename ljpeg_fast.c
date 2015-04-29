@@ -59,13 +59,11 @@ static unsigned getbithuff (int nbits, ushort *huff)
 
     while (  !reset
             && vbits < nbits
-            && pos<max_pos
-            && (c = ifp_m[pos++],1)
-            && !(
-                reset = zero_after_ff
-                && c == 0xff && ifp_m[pos++]
-               )
        ) {
+        if (pos>=max_pos) break;
+        c=ifp_m[pos++];
+        if((c==0xff && ifp_m[pos++]))
+            break;
         bitbuf = (bitbuf << 8) + (uchar) c;
         vbits += 8;
     }
