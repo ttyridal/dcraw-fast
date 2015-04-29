@@ -21,7 +21,7 @@ IGNORE_WARNINGS=-Wno-clobbered \
 
 
 
-dcraw: dcraw.o dcraw_ahdfast.o
+dcraw: dcraw.o dcraw_ahdfast.o convert_rgb.o
 	gcc $(ARCH) -Wall -Wextra -o $@ $^ $(LIBS) $(OPTIM)
 dcraw.o: dcraw.c
 	@gcc -c $(ARCH) -Wall -Wextra $(IGNORE_WARNINGS) $(DEFINES) -DNODEPS $(OPTIM) $<
@@ -29,6 +29,8 @@ dcraw.o: dcraw.c
 dcraw_ahdfast.o: dcraw_ahdfast.c
 	@gcc -c -std=gnu99  $(ARCH) $(DEFINES) -Werror -Wall -Wextra $(OPTIM) $<
 ljpeg_fast.o: ljpeg_fast.c
+	@gcc -c -std=gnu99 $(ARCH) $(DEFINES) -Werror -Wall -Wextra $(OPTIM) $<
+convert_rgb.o: convert_rgb.c
 	@gcc -c -std=gnu99 $(ARCH) $(DEFINES) -Werror -Wall -Wextra $(OPTIM) $<
 
 .PHONY: test

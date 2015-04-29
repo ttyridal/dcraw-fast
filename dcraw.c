@@ -9205,6 +9205,7 @@ quit:
 }
 #endif
 
+void convert_to_rgb_fast(void);
 void CLASS convert_to_rgb()
 {
   int row, col, c, i, j, k;
@@ -9959,7 +9960,7 @@ next:
 #ifndef NO_LCMS
     if (cam_profile) apply_profile (cam_profile, out_profile);
 #endif
-    convert_to_rgb();
+    convert_to_rgb_fast();
     if (use_fuji_rotate) stretch();
 thumbnail:
     if (write_fun == &CLASS jpeg_thumb)
