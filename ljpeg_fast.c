@@ -50,10 +50,12 @@ static unsigned getbithuff (int nbits, ushort *huff)
     static int vbits=0, reset=0;
     unsigned c;
 
-    if (nbits > 25) return 0;
+    if (nbits > 25)
+        return 0;
     if (nbits < 0)
         return bitbuf = vbits = reset = 0;
-    if (nbits == 0 || vbits < 0) return 0;
+    if (nbits == 0 || vbits < 0)
+        return 0;
 
     while (  !reset
             && vbits < nbits
@@ -73,7 +75,8 @@ static unsigned getbithuff (int nbits, ushort *huff)
         c = (uchar) huff[c];
     } else
         vbits -= nbits;
-    if (vbits < 0) derror();
+    if (vbits < 0)
+        derror();
     return c;
 }
 
@@ -101,7 +104,8 @@ ushort * ljpeg_row_fast (int jrow, struct jhead *jh)
     ushort mark=0, *row[3];
 
     if (jrow * jh->wide % jh->restart == 0) {
-        for(c=0; c<6; c++) jh->vpred[c] = 1 << (jh->bits-1);
+        for(c=0; c<6; c++)
+            jh->vpred[c] = 1 << (jh->bits-1);
         if (jrow) {
             pos-=2;
             do {
@@ -111,14 +115,17 @@ ushort * ljpeg_row_fast (int jrow, struct jhead *jh)
         }
         getbits(-1);
     }
-    for(c=0; c<3; c++) row[c] = jh->row + jh->wide*jh->clrs*((jrow+c) & 1);
+    for(c=0; c<3; c++)
+        row[c] = jh->row + jh->wide*jh->clrs*((jrow+c) & 1);
     for (col=0; col < jh->wide; col++)
         for(c=0; c<jh->clrs; c++) {
             diff = ljpeg_diff (jh->huff[c]);
             if (jh->sraw && c <= jh->sraw && (col | c))
                 pred = spred;
-            else if (col) pred = row[0][-jh->clrs];
-            else pred = (jh->vpred[c] += diff) - diff;
+            else if (col)
+                pred = row[0][-jh->clrs];
+            else
+                pred = (jh->vpred[c] += diff) - diff;
             if (jrow && col) switch (jh->psv) {
                 case 1:
                     break;
@@ -143,8 +150,10 @@ ushort * ljpeg_row_fast (int jrow, struct jhead *jh)
                 default:
                     pred = 0;
                 }
-            if ((**row = pred + diff) >> jh->bits) derror();
-            if (c <= jh->sraw) spred = **row;
+            if ((**row = pred + diff) >> jh->bits)
+                derror();
+            if (c <= jh->sraw)
+                spred = **row;
             row[0]++; row[1]++;
         }
     return row[2];
