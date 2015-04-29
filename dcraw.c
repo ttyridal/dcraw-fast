@@ -9944,8 +9944,10 @@ next:
 	ppg_interpolate();
       else if (filters == 9)
 	xtrans_interpolate (quality*2-3);
-      else
+      else if (colors == 3 && width%2==0)
 	ahd_interpolate_fast();
+      else
+	ahd_interpolate();
     }
     if (mix_green)
       for (colors=3, i=0; i < height*width; i++)

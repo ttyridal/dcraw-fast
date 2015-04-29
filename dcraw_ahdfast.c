@@ -52,35 +52,6 @@ static void cielab_init()
                 cielab_xyz_cam[i][j] += xyz_rgb[i][k] * rgb_cam[k][j] / d65_white[i];
 }
 
-static void cielab (ushort rgb[3], short lab[3])
-{
-    unsigned c;
-    float xyz[3];
-
-    xyz[0] = xyz[1] = xyz[2] = 0.5;
-    for(c=0; c<colors; c++) {
-        xyz[0] += cielab_xyz_cam[0][c] * rgb[c];
-        xyz[1] += cielab_xyz_cam[1][c] * rgb[c];
-        xyz[2] += cielab_xyz_cam[2][c] * rgb[c];
-    }
-    if (unlikely(xyz[0]>0xffff)) xyz[0]=0xffff;
-    else if (unlikely(xyz[0]<0)) xyz[0]=0;
-    if (unlikely(xyz[1]>0xffff)) xyz[1]=0xffff;
-    else if (unlikely(xyz[1]<0)) xyz[1]=0;
-    if (unlikely(xyz[2]>0xffff)) xyz[2]=0xffff;
-    else if (unlikely(xyz[2]<0)) xyz[2]=0;
-
-    xyz[0] = cielab_cbrt[(int) xyz[0]];
-    xyz[1] = cielab_cbrt[(int) xyz[1]];
-    xyz[2] = cielab_cbrt[(int) xyz[2]];
-    lab[0] = 64 * (116 * xyz[1] - 16);
-    lab[1] = 64 * 500 * (xyz[0] - xyz[1]);
-    lab[2] = 64 * 200 * (xyz[1] - xyz[2]);
-}
-
-
-
-
 union rgbpix {
     uint64_t P;
     ushort c[4];
@@ -93,11 +64,78 @@ union rgbpix {
 };
 
 union hvrgbpix {
+    __m128i vec;
     struct {
         union rgbpix h;
         union rgbpix v;
     };
 };
+
+static __m128i cielabv (union hvrgbpix rgb)
+{
+    __m128 xvxyz[2] = {_mm_set1_ps(0.5),_mm_set1_ps(0.5) }; //,0.5,0.5,0.5);
+
+    __m128 vrgb0h = _mm_set1_ps(rgb.h.c[0]);
+    __m128 vrgb1h = _mm_set1_ps(rgb.h.c[1]);
+    __m128 vrgb2h = _mm_set1_ps(rgb.h.c[2]);
+    __m128 vrgb0v = _mm_set1_ps(rgb.v.c[0]);
+    __m128 vrgb1v = _mm_set1_ps(rgb.v.c[1]);
+    __m128 vrgb2v = _mm_set1_ps(rgb.v.c[2]);
+    __m128 vcam0 = _mm_setr_ps(cielab_xyz_cam[0][0],cielab_xyz_cam[1][0],cielab_xyz_cam[2][0],0);
+    __m128 vcam1 = _mm_setr_ps(cielab_xyz_cam[0][1],cielab_xyz_cam[1][1],cielab_xyz_cam[2][1],0);
+    __m128 vcam2 = _mm_setr_ps(cielab_xyz_cam[0][2],cielab_xyz_cam[1][2],cielab_xyz_cam[2][2],0);
+
+#ifdef __FMA__
+#warn "untested!!"
+    xvxyz[0] = _mm_fmadd_ps(vcam0,vrgb0h,xvxyz[0]);
+    xvxyz[0] = _mm_fmadd_ps(vcam1,vrgb1h,xvxyz[0]);
+    xvxyz[0] = _mm_fmadd_ps(vcam2,vrgb2h,xvxyz[0]);
+    xvxyz[1] = _mm_fmadd_ps(vcam0,vrgb0v,xvxyz[1]);
+    xvxyz[1] = _mm_fmadd_ps(vcam1,vrgb1v,xvxyz[1]);
+    xvxyz[1] = _mm_fmadd_ps(vcam2,vrgb2v,xvxyz[1]);
+#else
+    xvxyz[0] = _mm_add_ps(xvxyz[0], _mm_mul_ps(vcam0,vrgb0h));
+    xvxyz[0] = _mm_add_ps(xvxyz[0], _mm_mul_ps(vcam1,vrgb1h));
+    xvxyz[0] = _mm_add_ps(xvxyz[0], _mm_mul_ps(vcam2,vrgb2h));
+    xvxyz[1] = _mm_add_ps(xvxyz[1], _mm_mul_ps(vcam0,vrgb0v));
+    xvxyz[1] = _mm_add_ps(xvxyz[1], _mm_mul_ps(vcam1,vrgb1v));
+    xvxyz[1] = _mm_add_ps(xvxyz[1], _mm_mul_ps(vcam2,vrgb2v));
+#endif
+
+    xvxyz[0] = _mm_max_ps(_mm_set1_ps(0),
+                          _mm_min_ps(_mm_set1_ps(0xffff),
+                                     _mm_round_ps(xvxyz[0], _MM_FROUND_TO_ZERO)));
+    xvxyz[1] = _mm_max_ps(_mm_set1_ps(0),
+                          _mm_min_ps(_mm_set1_ps(0xffff),
+                                     _mm_round_ps(xvxyz[1], _MM_FROUND_TO_ZERO)));
+    __m128i loadaddrh = _mm_cvttps_epi32(xvxyz[0]);
+    __m128i loadaddrv = _mm_cvttps_epi32(xvxyz[1]);
+
+    __m128 vlabh, vxyzh = {cielab_cbrt[_mm_extract_epi32(loadaddrh,0)],
+                           cielab_cbrt[_mm_extract_epi32(loadaddrh,1)],
+                           cielab_cbrt[_mm_extract_epi32(loadaddrh,2)],
+                           0};
+    __m128 vlabv, vxyzv = {cielab_cbrt[_mm_extract_epi32(loadaddrv,0)],
+                           cielab_cbrt[_mm_extract_epi32(loadaddrv,1)],
+                           cielab_cbrt[_mm_extract_epi32(loadaddrv,2)],
+                           0};
+
+    vlabh = _mm_sub_ps(_mm_shuffle_ps(vxyzh,vxyzh,_MM_SHUFFLE(0,1,0,1)),
+                       _mm_shuffle_ps(vxyzh,vxyzh,_MM_SHUFFLE(0,2,1,3)));
+    vlabh = _mm_mul_ps(vlabh,_mm_setr_ps(116,500,200,0));
+    vlabh = _mm_sub_ps(vlabh,_mm_setr_ps(16,0,0,0));
+    vlabh = _mm_mul_ps(vlabh,_mm_set_ps1(64));
+    vlabh = _mm_round_ps(vlabh, _MM_FROUND_TO_ZERO);
+
+    vlabv = _mm_sub_ps(_mm_shuffle_ps(vxyzv,vxyzv,_MM_SHUFFLE(0,1,0,1)),
+                       _mm_shuffle_ps(vxyzv,vxyzv,_MM_SHUFFLE(0,2,1,3)));
+    vlabv = _mm_mul_ps(vlabv,_mm_setr_ps(116,500,200,0));
+    vlabv = _mm_sub_ps(vlabv,_mm_setr_ps(16,0,0,0));
+    vlabv = _mm_mul_ps(vlabv,_mm_set_ps1(64));
+    vlabv = _mm_round_ps(vlabv, _MM_FROUND_TO_ZERO);
+
+    return _mm_set_epi64(_mm_cvtps_pi16(vlabv),_mm_cvtps_pi16(vlabh));
+}
 
 void ahd_interpolate_tile(int top, char * buffer)
 {
@@ -107,9 +145,10 @@ void ahd_interpolate_tile(int top, char * buffer)
     union hvrgbpix (*rgb)[width] = (union hvrgbpix (*)[width])buffer;
     union hvrgbpix *rix;
     union rgbpix * pix;
-    short (*lab)[TS][width][8], (*lix)[8];
+    union hvrgbpix (*lab)[width];
+    short (*lix)[8];
     char (*homo)[TS][width];
-    lab  = (short (*)[TS][width][8])(buffer + 16*width*TS);
+    lab  = (union hvrgbpix (*)[width])(buffer + 16*width*TS);
     homo = (char  (*)[TS][width])(buffer + 32*width*TS);
 
     const int left=2;
@@ -140,142 +179,172 @@ void ahd_interpolate_tile(int top, char * buffer)
                 c2 = FC(rowx,left+2);
 
             pix = (union rgbpix*)image + row*width+left+1;
+            rix = &rgb[row-top][1];
+
             val = ((pix[-1].g + pix[0].c[c1] + pix[1].g) * 2 - pix[-2].c[c1] - pix[2].c[c1]) >> 2;
-            rgb[row-top][1].h.g = ULIM(val,pix[-1].g,pix[1].g);
+            rix[0].h.g = ULIM(val,pix[-1].g,pix[1].g);
             val = ((pix[-width].g + pix[0].c[c1] + pix[width].g) * 2 - pix[-2*width].c[c1] - pix[2*width].c[c1]) >> 2;
-            rgb[row-top][1].v.g = ULIM(val,pix[-width].g,pix[width].g);
+            rix[0].v.g = ULIM(val,pix[-width].g,pix[width].g);
             for (col=left+1; col < width-3; col+=2) {
-                pix = (union rgbpix*)image + rowx*width+col;
+                pix = (union rgbpix*)image + rowx*width+col+1;
 
-                union rgbpix rix0_0,rix0_r;
-                union rgbpix rix1_0,rix1_r;
+                union hvrgbpix rixr, rix0;
 
-                rix = &rgb[rowx-top][col-left];
+                rix = &rgb[rowx-top][col-left]+1;
 
-                signed pix_ud = pix[-width].c[c1] + pix[width].c[c1];
-                signed pix_diag = pix[-width].c[c1] + pix[-width+2].c[c1];
-                signed pix_lr = pix[-1].c[c2] + pix[1].c[c2];
-                rix1_r.c[c2] = rix0_r.c[c2]  = pix[1].c[c2];
-                rix1_0.g = rix0_0.g = pix[0].g;
-                pix_diag += pix[width].c[c1] + pix[width+2].c[c1];
-                val = ((pix[width+1].g + pix[width+2].c[c1] + pix[width+3].g) * 2 - pix[width].c[c1] - pix[width+4].c[c1]) >> 2;
-                signed rix0_dr = ULIM(val,pix[width+1].g,pix[width+3].g);
-                val = ((pix[2].g + pix[width+2].c[c1] + pix[2*width+2].g) * 2 - pix[-width+2].c[c1] - pix[3*width+2].c[c1]) >> 2;
-                signed rix1_dr = ULIM(val,pix[2].g,pix[2*width+2].g);
+                signed pix_diag = pix[-width-1].c[c1] + pix[-width+1].c[c1];
+                signed pix_ul = pix[-width-1].c[c1];
+                rixr.vec = _mm_set1_epi16(pix[-1].g);
+                signed pix_lr = pix[-2].c[c2] + pix[0].c[c2];
+                rix0.h.c[c2] = rix0.v.c[c2]  = pix[0].c[c2];
+                pix_diag += pix[width-1].c[c1] + pix[width+1].c[c1] + 1;
+                signed pix_dl = pix[width-1].c[c1];
 
+                //fully loaded
+                __m128i rix_dr =               _mm_setr_epi32(pix[width].g,       pix[width-1].c[c1], pix[1].g, pix[-width+1].c[c1]);
+                rix_dr = _mm_add_epi32(rix_dr,_mm_setr_epi32(pix[width+1].c[c1],  pix[width+3].c[c1], pix[width+1].c[c1], 0));
+                rix_dr = _mm_add_epi32(rix_dr,_mm_setr_epi32(pix[width+2].g,      0,                  pix[2*width+1].g, pix[3*width+1].c[c1]));
+                rix_dr = _mm_mullo_epi32(rix_dr,_mm_setr_epi32(2,1,2,1));
+                //half loaded
+                rix_dr = _mm_hsub_epi32(rix_dr,_mm_setzero_si128());
+                rix_dr = _mm_srai_epi32(rix_dr,2);
+                __m128i a = _mm_setr_epi32(pix[width].g,pix[1].g,0,0);
+                __m128i b = _mm_setr_epi32(pix[width+2].g,pix[2*width+1].g,0,0);
+                __m128i m = _mm_min_epi32(a,b);
+                __m128i M = _mm_max_epi32(a,b);
+                rix_dr = _mm_min_epi32(rix_dr,M);
+                rix_dr = _mm_max_epi32(rix_dr,m);
 
-                signed rix0_u = rix[-width].h.g;
-                signed rix1_u = rix[-width].v.g;
-                signed rix0_ur = rix[-width+2].h.g;
-                signed rix1_ur = rix[-width+2].v.g;
-                signed rix0_l = rix[-1].h.g;
-                signed rix1_l = rix[-1].v.g;
-                rix0_r.g = rix[1].h.g;
-                rix1_r.g = rix[1].v.g;
-                signed rix0_d = rix[width].h.g;
-                signed rix1_d = rix[width].v.g;
-
-                signed rix0_ud = rix0_u + rix0_d;
-                signed rix1_ud = rix1_u + rix1_d;
-
-                val = rix0_0.g + (( pix_lr - rix0_l - rix0_r.g ) >> 1);
-                MOV_CLAMP(rix0_0.c[c2],val);
-                val = rix0_0.g + (( pix_lr - rix1_l - rix1_r.g) >> 1);
-                MOV_CLAMP(rix1_0.c[c2], val);
-                val = rix0_0.g + (( pix_ud - rix0_ud ) >> 1);
-                MOV_CLAMP(rix0_0.c[c1],val);
-                val = rix0_0.g + (( pix_ud - rix1_ud ) >> 1);
-                MOV_CLAMP(rix1_0.c[c1],val);
-
-                val = rix0_r.g + (( pix_diag - rix0_ud - rix0_ur - rix0_dr + 1) >> 2);
-                MOV_CLAMP(rix0_r.c[c1],val);
-                val = rix1_r.g + (( pix_diag - rix1_ud - rix1_ur - rix1_dr + 1) >> 2);
-                MOV_CLAMP(rix1_r.c[c1],val);
-
-                cielab (rix0_0.c,lab[0][rowx-top][col-left]);
-                cielab (rix1_0.c,&lab[0][rowx-top][col-left][4]);
-                cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
-                cielab (rix1_r.c,&lab[0][rowx-top][col-left+1][4]);
-                memcpy(&rix[0].h,&rix0_0,6);
-                memcpy(&rix[0].v,&rix1_0,6);
-                memcpy(&rix[1].h,&rix0_r,6);
-                memcpy(&rix[1].v,&rix1_r,6);
-                rix[width+2].h.g = rix0_dr;
-                rix[width+2].v.g = rix1_dr;
-            }
-        } else {
-            int c1 = FC(rowx,left+1),
-                c2 = FC(rowx+1,left+2);
-            pix = (union rgbpix*)image + row*width+left;
-            val = ((pix[-1].g + pix[0].c[c2] + pix[1].g) * 2 - pix[-2].c[c2] - pix[2].c[c2]) >> 2;
-            rgb[row-top][0].h.g = ULIM(val,pix[-1].g,pix[1].g);
-            val = ((pix[-width].g + pix[0].c[c2] + pix[width].g) * 2 - pix[-2*width].c[c2] - pix[2*width].c[c2]) >> 2;
-            rgb[row-top][0].v.g = ULIM(val,pix[-width].g,pix[width].g);
-
-
-            for (col=left+1; col < width-3; col+=2) {
-                pix = (union rgbpix*)image + rowx*width+col;
-
-                union rgbpix rix0_0,rix0_r;
-                union rgbpix rix1_0,rix1_r;
-
-                rix = &rgb[rowx-top][col-left];
-
-                signed pix_diag = pix[-width-1].c[c2] + pix[-width+1].c[c2];
-                signed pix_ur = pix[-width+1].c[c2];
-                rix1_0.c[c1] = rix0_0.c[c1] = pix[0].c[c1];
-                signed pix_lr = pix[0].c[c1] + pix[2].c[c1];
-                rix1_r.g = rix0_r.g = pix[1].g;
-                pix_diag += pix[width-1].c[c2] + pix[width+1].c[c2];
-                signed pix_dr = pix[width+1].c[c2];
-
-                val = ((pix[width].g + pix[width+1].c[c2] + pix[width+2].g) * 2 - pix[width-1].c[c2] - pix[width+3].c[c2]) >> 2;
-                signed rix0_dr = ULIM(val,pix[width].g,pix[width+2].g);
-                val = ((rix1_r.g + pix_dr + pix[2*width+1].g) * 2 - pix_ur - pix[3*width+1].c[c2]) >> 2;
-                signed rix1_dr = ULIM(val,pix[1].g,pix[2*width+1].g);
-
-                signed pix_udr = pix_dr+pix_ur;
+                signed pix_udr = pix_ul + pix_dl;
 
                 signed rix0_ul = rix[-width-1].h.g;
                 signed rix1_ul = rix[-width-1].v.g;
-                signed rix0_ur = rix[-width+1].h.g;
-                signed rix1_ur = rix[-width+1].v.g;
-                rix0_0.g = rix[0].h.g;
-                rix1_0.g = rix[0].v.g;
-                signed rix0_rr = rix[2].h.g;
-                signed rix1_rr = rix[2].v.g;
+                __m128i rix_ur = _mm_setr_epi32(rix[-width+1].h.g, rix[-width+1].v.g, 0, 0);
+                signed rix0_rr = rix[-2].h.g;
+                signed rix1_rr = rix[-2].v.g;
+
+                rix0.h.g = rix[0].h.g;
+                rix0.v.g = rix[0].v.g;
                 signed rix0_dl = rix[width-1].h.g;
                 signed rix1_dl = rix[width-1].v.g;
 
-                signed rix0_udr = rix0_dr+rix0_ur;
-                signed rix1_udr = rix1_dr+rix1_ur;
+                // fully loaded
+                __m128i rix_udr = _mm_setr_epi32(rix0_ul, rix1_ul, rix0_rr, rix1_rr);
+                rix_udr = _mm_add_epi32(rix_udr, _mm_setr_epi32(rix0_dl, rix1_dl, rix0.h.g, rix0.v.g));
+                __m128i v2 = _mm_set_epi32(pix_lr, pix_lr, pix_udr, pix_udr);
+                v2 = _mm_sub_epi32(v2, rix_udr);
+                v2 = _mm_srai_epi32(v2,1);
+                v2 = _mm_add_epi32(v2,_mm_cvtepu16_epi32(rixr.vec));
+                v2 = _mm_max_epi32(v2, _mm_setzero_si128());
+                v2 = _mm_min_epi32(v2, _mm_set1_epi32(0xffff));
+                rixr.h.c[c2] = _mm_extract_epi32(v2,2);
+                rixr.v.c[c2] = _mm_extract_epi32(v2,3);
+                rixr.h.c[c1] = _mm_extract_epi32(v2,0);
+                rixr.v.c[c1] = _mm_extract_epi32(v2,1);
+
+                // following only uses 64 bit
+                __m128i v1 = _mm_set1_epi32(pix_diag);
+                v1 = _mm_sub_epi32(v1, rix_ur);
+                v1 = _mm_sub_epi32(v1, rix_dr);
+                v1 = _mm_sub_epi32(v1, rix_udr);
+                v1 = _mm_srai_epi32(v1,2);
+                v1 = _mm_add_epi32(v1, _mm_setr_epi32(rix0.h.g, rix0.v.g, 0, 0));
+                v1 = _mm_max_epi32(v1, _mm_setzero_si128());
+                v1 = _mm_min_epi32(v1, _mm_set1_epi32(0xffff));
+                rix0.h.c[c1] = _mm_extract_epi32(v1,0);
+                rix0.v.c[c1] = _mm_extract_epi32(v1,1);
 
 
-                val = rix0_r.g + (( pix_lr - rix0_0.g - rix0_rr ) >> 1);
-                MOV_CLAMP(rix0_r.c[c1], val);
-                val = rix0_r.g + (( pix_lr - rix1_0.g - rix1_rr ) >> 1);
-                MOV_CLAMP(rix1_r.c[c1], val);
-                val = rix0_r.g + ((pix_udr - rix0_udr ) >> 1);
-                MOV_CLAMP(rix0_r.c[c2], val);
-                val = rix0_r.g + ((pix_udr - rix1_udr ) >> 1);
-                MOV_CLAMP(rix1_r.c[c2], val);
+                lab[rowx-top][col-left].vec = cielabv(rixr);
+                lab[rowx-top][col-left+1].vec = cielabv(rix0);
 
-                val = rix0_0.g + ((pix_diag - rix0_ul - rix0_dl - rix0_udr + 1) >> 2);
-                MOV_CLAMP(rix0_0.c[c2],val);
-                val = rix1_0.g + ((pix_diag - rix1_ul - rix1_udr - rix1_dl + 1) >> 2);
-                MOV_CLAMP(rix1_0.c[c2],val);
+                _mm_store_si128(&rix[-1].vec,rixr.vec);
+                _mm_store_si128(&rix[0].vec,rix0.vec);
 
+                rix[width+1].h.g = _mm_extract_epi32(rix_dr,0);
+                rix[width+1].v.g = _mm_extract_epi32(rix_dr,1);
+            }
+        } else {
+            int c1 = FC(rowx+1,left+2),
+                c2 = FC(rowx,left+1);
 
-                cielab (rix0_0.c,lab[0][rowx-top][col-left]);
-                cielab (rix1_0.c,&lab[0][rowx-top][col-left][4]);
-                cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
-                cielab (rix1_r.c,&lab[0][rowx-top][col-left+1][4]);
-                memcpy(&rix[0].h,&rix0_0,6);
-                memcpy(&rix[0].v,&rix1_0,6);
-                memcpy(&rix[1].h,&rix0_r,6);
-                memcpy(&rix[1].v,&rix1_r,6);
-                rix[width+1].h.g = rix0_dr;
-                rix[width+1].v.g = rix1_dr;
+            pix = (union rgbpix*)image + row*width+left;
+            rix = &rgb[row-top][0];
+            val = ((pix[-1].g + pix[0].c[c1] + pix[1].g) * 2 - pix[-2].c[c1] - pix[2].c[c1]) >> 2;
+            rix[0].h.g = ULIM(val,pix[-1].g,pix[1].g);
+            val = ((pix[-width].g + pix[0].c[c1] + pix[width].g) * 2 - pix[-2*width].c[c1] - pix[2*width].c[c1]) >> 2;
+            rix[0].v.g = ULIM(val,pix[-width].g,pix[width].g);
+            for (col=left+1; col < width-3; col+=2) {
+                pix = (union rgbpix*)image + rowx*width+col;
+
+                union hvrgbpix rix0, rixr;
+
+                rix = &rgb[rowx-top][col-left];
+
+                signed pix_diag = pix[-width-1].c[c1] + pix[-width+1].c[c1];
+                signed pix_ur = pix[-width+1].c[c1];
+                rix0.h.c[c2] = rix0.v.c[c2] = pix[0].c[c2];
+                signed pix_lr = pix[0].c[c2] + pix[2].c[c2];
+                rixr.h.g = rixr.v.g = pix[1].g;
+                pix_diag += pix[width-1].c[c1] + pix[width+1].c[c1]+1;
+                signed pix_dr = pix[width+1].c[c1];
+
+                __m128i rix_dr =                _mm_setr_epi32(pix[width].g,        pix[width-1].c[c1], rixr.v.g, pix_ur             );
+                rix_dr = _mm_add_epi32(rix_dr,  _mm_setr_epi32(pix[width+1].c[c1],  pix[width+3].c[c1], pix_dr, 0));
+                rix_dr = _mm_add_epi32(rix_dr,  _mm_setr_epi32(pix[width+2].g,      0,                  pix[2*width+1].g, pix[3*width+1].c[c1]));
+                rix_dr = _mm_mullo_epi32(rix_dr,_mm_setr_epi32(2,1,2,1));
+                rix_dr = _mm_hsub_epi32(rix_dr,_mm_setzero_si128());
+                rix_dr = _mm_srai_epi32(rix_dr,2);
+                __m128i a = _mm_setr_epi32(pix[width].g,pix[1].g,0,0);
+                __m128i b = _mm_setr_epi32(pix[width+2].g,pix[2*width+1].g,0,0);
+                __m128i m = _mm_min_epi32(a,b);
+                __m128i M = _mm_max_epi32(a,b);
+                rix_dr = _mm_min_epi32(rix_dr,M);
+                rix_dr = _mm_max_epi32(rix_dr,m);
+
+                signed pix_udr = pix_ur+pix_dr;
+
+                __m128i rix_ul = _mm_setr_epi32(rix[-width-1].h.g, rix[-width-1].v.g, 0, 0);
+                __m128i rix_ur = _mm_setr_epi32(rix[-width+1].h.g, rix[-width+1].v.g, rix[2].h.g, rix[2].v.g);
+                __m128i rix0g = _mm_setr_epi32(rix[0].h.g, rix[0].v.g,0,0);
+                rix0.h.g = rix[0].h.g;
+                rix0.v.g = rix[0].v.g;
+                __m128i rix_dl = _mm_setr_epi32(rix[width-1].h.g, rix[width-1].v.g,0,0);
+
+                rix_dr = _mm_unpacklo_epi64(rix_dr, rix0g);
+                __m128i rix_udr = _mm_add_epi32(rix_ur, rix_dr);
+
+                __m128i v2 = _mm_setr_epi32(pix_udr, pix_udr, pix_lr, pix_lr);
+                v2 = _mm_sub_epi32(v2, rix_udr);
+                v2 = _mm_srai_epi32(v2, 1);
+                v2 = _mm_add_epi32(v2, _mm_set1_epi32(rixr.h.g));
+                v2 = _mm_max_epi32(v2, _mm_setzero_si128());
+                v2 = _mm_min_epi32(v2, _mm_set1_epi32(0xffff));
+
+                rixr.h.c[c2] = _mm_extract_epi32(v2,2);
+                rixr.v.c[c2] = _mm_extract_epi32(v2,3);
+                rixr.h.c[c1] = _mm_extract_epi32(v2,0);
+                rixr.v.c[c1] = _mm_extract_epi32(v2,1);
+
+                __m128i v1 = _mm_set1_epi32(pix_diag);
+                v1 = _mm_sub_epi32(v1, rix_ul);
+                v1 = _mm_sub_epi32(v1, rix_dl);
+                v1 = _mm_sub_epi32(v1, rix_udr);
+                v1 = _mm_srai_epi32(v1,2);
+                v1 = _mm_add_epi32(v1, rix0g);
+                v1 = _mm_max_epi32(v1, _mm_setzero_si128());
+                v1 = _mm_min_epi32(v1, _mm_set1_epi32(0xffff));
+                rix0.h.c[c1] = _mm_extract_epi32(v1,0);
+                rix0.v.c[c1] = _mm_extract_epi32(v1,1);
+
+                lab[rowx-top][col-left].vec = cielabv(rix0);
+                lab[rowx-top][col-left+1].vec = cielabv(rixr);
+
+                _mm_store_si128(&rix[0].vec,rix0.vec);
+                _mm_store_si128(&rix[1].vec,rixr.vec);
+
+                rix[width+1].h.g = _mm_extract_epi32(rix_dr,0);
+                rix[width+1].v.g = _mm_extract_epi32(rix_dr,1);
             }
         }
     }
@@ -285,7 +354,7 @@ void ahd_interpolate_tile(int top, char * buffer)
         tr = row-top;
         for (col=left+2; col < width-4; col++) {
             tc = col-left;
-            lix = &lab[0][tr][tc];
+            lix = (short(*)[8])&lab[tr][tc].h.c;
             for (i=0; i < 4; i++) {
                 ldiff[0][i] = ABS(lix[0][0]-lix[dir[i]][0]);
                 abdiff[0][i] = SQR(lix[0][1]-lix[dir[i]][1])
