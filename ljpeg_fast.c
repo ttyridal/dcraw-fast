@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <time.h>
 #include <string.h>
+#include <inttypes.h>
 
 #if !defined(ushort)
 #define ushort unsigned short
@@ -22,6 +24,21 @@ struct jhead {
 extern FILE *ifp;
 extern unsigned zero_after_ff, dng_version;
 
+static uint64_t timediff(const struct timespec * start)
+{
+    struct timespec end;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
+
+    struct timespec temp;
+    if ((end.tv_nsec-start->tv_nsec)<0) {
+        temp.tv_sec = end.tv_sec-start->tv_sec-1;
+        temp.tv_nsec = 1000000000+end.tv_nsec-start->tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec-start->tv_sec;
+        temp.tv_nsec = end.tv_nsec-start->tv_nsec;
+    }
+    return temp.tv_sec*1000000 + temp.tv_nsec/1000;
+}
 
 static unsigned getbithuff (int nbits, ushort *huff)
 {
@@ -118,11 +135,14 @@ ushort * ljpeg_row_fast (int jrow, struct jhead *jh)
     return row[2];
 }
 
+static struct timespec start;
+
 void ljpeg_end_fast (struct jhead *jh)
 {
     int c;
     for(c=0; c<4; c++) if (jh->free[c]) free (jh->free[c]);
     free (jh->row);
+    fprintf(stderr, "%15s %12" PRIu64 " us\n","runtime (jlpeg)",timediff(&start));
 }
 
 int ljpeg_start_fast (struct jhead *jh, int info_only)
@@ -131,6 +151,8 @@ int ljpeg_start_fast (struct jhead *jh, int info_only)
     uchar data[0x10000];
     const uchar *dp;
     size_t fread_b;
+
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
     memset (jh, 0, sizeof *jh);
     jh->restart = INT_MAX;
