@@ -4,6 +4,7 @@
 #include <time.h>
 #include <string.h>
 #include <inttypes.h>
+#include <sys/mman.h>
 
 #if !defined(ushort)
 #define ushort unsigned short
@@ -20,6 +21,9 @@ struct jhead {
     int bits, high, wide, clrs, sraw, psv, restart, vpred[6];
     ushort *huff[6], *free[4], *row;
 };
+unsigned char * ifp_m;
+size_t pos;
+size_t max_pos;
 
 extern FILE *ifp;
 extern unsigned zero_after_ff, dng_version;
@@ -50,8 +54,16 @@ static unsigned getbithuff (int nbits, ushort *huff)
     if (nbits < 0)
         return bitbuf = vbits = reset = 0;
     if (nbits == 0 || vbits < 0) return 0;
-    while (!reset && vbits < nbits && (c = fgetc(ifp)) != (unsigned)EOF &&
-           !(reset = zero_after_ff && c == 0xff && fgetc(ifp))) {
+
+    while (  !reset
+            && vbits < nbits
+            && pos<max_pos
+            && (c = ifp_m[pos++],1)
+            && !(
+                reset = zero_after_ff
+                && c == 0xff && ifp_m[pos++]
+               )
+       ) {
         bitbuf = (bitbuf << 8) + (uchar) c;
         vbits += 8;
     }
@@ -67,6 +79,7 @@ static unsigned getbithuff (int nbits, ushort *huff)
 
 #define getbits(n) getbithuff(n,0)
 #define gethuff(h) getbithuff(*h,h+1)
+
 
 
 static int ljpeg_diff (ushort *huff)
@@ -90,9 +103,11 @@ ushort * ljpeg_row_fast (int jrow, struct jhead *jh)
     if (jrow * jh->wide % jh->restart == 0) {
         for(c=0; c<6; c++) jh->vpred[c] = 1 << (jh->bits-1);
         if (jrow) {
-            fseek (ifp, -2, SEEK_CUR);
-            do mark = (mark << 8) + (c = fgetc(ifp));
-            while (c != EOF && mark >> 4 != 0xffd);
+            pos-=2;
+            do {
+                mark = (mark << 8) + ifp_m[pos++];
+            }
+            while (pos<max_pos && mark >> 4 != 0xffd);
         }
         getbits(-1);
     }
@@ -141,7 +156,9 @@ void ljpeg_end_fast (struct jhead *jh)
 {
     int c;
     for(c=0; c<4; c++) if (jh->free[c]) free (jh->free[c]);
+    munmap(ifp_m,0);
     free (jh->row);
+//     fseek(ifp, pos, SEEK_SET);
     fprintf(stderr, "%15s %12" PRIu64 " us\n","runtime (jlpeg)",timediff(&start));
 }
 
@@ -150,23 +167,26 @@ int ljpeg_start_fast (struct jhead *jh, int info_only)
     int c, tag, len;
     uchar data[0x10000];
     const uchar *dp;
-    size_t fread_b;
+
 
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 
     memset (jh, 0, sizeof *jh);
+    pos = ftell(ifp);
+    fseek(ifp, 0, SEEK_END);
+    max_pos = ftell(ifp);
+    ifp_m = mmap(NULL, max_pos, PROT_READ,MAP_SHARED, fileno(ifp), 0);
+
     jh->restart = INT_MAX;
-    fread_b=fread (data, 2, 1, ifp);
-    if(fread_b!=1) derror();
-    if (data[1] != 0xd8) return 0;
+    pos+=2;
+    if (ifp_m[pos-1] != 0xd8) return 0;
     do {
-        fread_b = fread (data, 2, 2, ifp);
-        if (fread_b != 2) derror();
-        tag =  data[0] << 8 | data[1];
-        len = (data[2] << 8 | data[3]) - 2;
+//         memcpy(data, ifp_m+pos,4); pos+=4;
+        pos+=4;
+        tag =  ifp_m[pos-4] << 8 | ifp_m[pos-3];
+        len = (ifp_m[pos-2] << 8 | ifp_m[pos-1]) - 2;
         if (tag <= 0xff00) return 0;
-        fread_b=fread (data, 1, len, ifp);
-        if(fread_b!=(unsigned)len) derror();
+        memcpy(data, ifp_m+pos,len); pos+=len;
         switch (tag) {
         case 0xffc3:
             jh->sraw = ((data[7] >> 4) * (data[7] & 15) - 1) & 3;
@@ -175,7 +195,7 @@ int ljpeg_start_fast (struct jhead *jh, int info_only)
             jh->high = data[1] << 8 | data[2];
             jh->wide = data[3] << 8 | data[4];
             jh->clrs = data[5] + jh->sraw;
-            if (len == 9 && !dng_version) getc(ifp);
+            if (len == 9 && !dng_version) pos++;
             break;
         case 0xffc4:
             if (info_only) break;
