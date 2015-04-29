@@ -102,9 +102,11 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
             abeps = MIN(MAX(abdiff[0][0],abdiff[0][1]),
                         MAX(abdiff[1][2],abdiff[1][3]));
             for (d=0; d < 2; d++)
-                for (i=0; i < 4; i++)
-                    if (ldiff[d][i] <= leps && abdiff[d][i] <= abeps)
-                        homo[d][tr][tc]++;
+                homo[d][tr][tc]+=
+                    (ldiff[d][0] <= leps && abdiff[d][0] <= abeps)+
+                    (ldiff[d][1] <= leps && abdiff[d][1] <= abeps)+
+                    (ldiff[d][2] <= leps && abdiff[d][2] <= abeps)+
+                    (ldiff[d][3] <= leps && abdiff[d][3] <= abeps);
 
 
         }
