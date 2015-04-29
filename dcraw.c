@@ -823,6 +823,7 @@ struct jhead {
   ushort *huff[6], *free[4], *row;
 };
 
+int CLASS ljpeg_start_fast (struct jhead *jh, int info_only);
 int CLASS ljpeg_start (struct jhead *jh, int info_only)
 {
   int c, tag, len;
@@ -874,6 +875,7 @@ int CLASS ljpeg_start (struct jhead *jh, int info_only)
   return zero_after_ff = 1;
 }
 
+void CLASS ljpeg_end_fast (struct jhead *jh);
 void CLASS ljpeg_end (struct jhead *jh)
 {
   int c;
@@ -894,6 +896,7 @@ int CLASS ljpeg_diff (ushort *huff)
   return diff;
 }
 
+ushort * CLASS ljpeg_row_fast (int jrow, struct jhead *jh);
 ushort * CLASS ljpeg_row (int jrow, struct jhead *jh)
 {
   int col, c, diff, pred, spred=0;
@@ -939,11 +942,11 @@ void CLASS lossless_jpeg_load_raw()
   struct jhead jh;
   ushort *rp;
 
-  if (!ljpeg_start (&jh, 0)) return;
+  if (!ljpeg_start_fast (&jh, 0)) return;
   jwide = jh.wide * jh.clrs;
 
   for (jrow=0; jrow < jh.high; jrow++) {
-    rp = ljpeg_row (jrow, &jh);
+    rp = ljpeg_row_fast (jrow, &jh);
     if (load_flags & 1)
       row = jrow & 1 ? height-1-jrow/2 : jrow/2;
     for (jcol=0; jcol < jwide; jcol++) {
@@ -964,7 +967,7 @@ void CLASS lossless_jpeg_load_raw()
 	col = (row++,0);
     }
   }
-  ljpeg_end (&jh);
+  ljpeg_end_fast (&jh);
 }
 
 void CLASS canon_sraw_load_raw()
