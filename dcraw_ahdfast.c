@@ -107,9 +107,9 @@ void ahd_interpolate_tile(int top, char * buffer)
     union hvrgbpix (*rgb)[width] = (union hvrgbpix (*)[width])buffer;
     union hvrgbpix *rix;
     union rgbpix * pix;
-    short (*lab)[TS][width][4], (*lix)[4];
+    short (*lab)[TS][width][8], (*lix)[8];
     char (*homo)[TS][width];
-    lab  = (short (*)[TS][width][4])(buffer + 16*width*TS);
+    lab  = (short (*)[TS][width][8])(buffer + 16*width*TS);
     homo = (char  (*)[TS][width])(buffer + 32*width*TS);
 
     const int left=2;
@@ -193,9 +193,9 @@ void ahd_interpolate_tile(int top, char * buffer)
                 MOV_CLAMP(rix1_r.c[c1],val);
 
                 cielab (rix0_0.c,lab[0][rowx-top][col-left]);
+                cielab (rix1_0.c,&lab[0][rowx-top][col-left][4]);
                 cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
-                cielab (rix1_0.c,lab[1][rowx-top][col-left]);
-                cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
+                cielab (rix1_r.c,&lab[0][rowx-top][col-left+1][4]);
                 memcpy(&rix[0].h,&rix0_0,6);
                 memcpy(&rix[0].v,&rix1_0,6);
                 memcpy(&rix[1].h,&rix0_r,6);
@@ -267,9 +267,9 @@ void ahd_interpolate_tile(int top, char * buffer)
 
 
                 cielab (rix0_0.c,lab[0][rowx-top][col-left]);
+                cielab (rix1_0.c,&lab[0][rowx-top][col-left][4]);
                 cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
-                cielab (rix1_0.c,lab[1][rowx-top][col-left]);
-                cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
+                cielab (rix1_r.c,&lab[0][rowx-top][col-left+1][4]);
                 memcpy(&rix[0].h,&rix0_0,6);
                 memcpy(&rix[0].v,&rix1_0,6);
                 memcpy(&rix[1].h,&rix0_r,6);
@@ -285,13 +285,14 @@ void ahd_interpolate_tile(int top, char * buffer)
         tr = row-top;
         for (col=left+2; col < width-4; col++) {
             tc = col-left;
-            for (d=0; d < 2; d++) {
-                lix = &lab[d][tr][tc];
-                for (i=0; i < 4; i++) {
-                    ldiff[d][i] = ABS(lix[0][0]-lix[dir[i]][0]);
-                    abdiff[d][i] = SQR(lix[0][1]-lix[dir[i]][1])
-                                   + SQR(lix[0][2]-lix[dir[i]][2]);
-                }
+            lix = &lab[0][tr][tc];
+            for (i=0; i < 4; i++) {
+                ldiff[0][i] = ABS(lix[0][0]-lix[dir[i]][0]);
+                abdiff[0][i] = SQR(lix[0][1]-lix[dir[i]][1])
+                               + SQR(lix[0][2]-lix[dir[i]][2]);
+                ldiff[1][i] = ABS(lix[0][0+4]-lix[dir[i]][0+4]);
+                abdiff[1][i] = SQR(lix[0][1+4]-lix[dir[i]][1+4])
+                               + SQR(lix[0][2+4]-lix[dir[i]][2+4]);
             }
             leps = MIN(MAX(ldiff[0][0],ldiff[0][1]),
                        MAX(ldiff[1][2],ldiff[1][3]));
