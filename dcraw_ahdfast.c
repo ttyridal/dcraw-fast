@@ -92,27 +92,27 @@ union rgbpix {
     };
 };
 
-void ahd_interpolate_tile(int top,int left, char * buffer)
+void ahd_interpolate_tile(int top, char * buffer)
 {
     int i, j, row, col, tr, tc, c, d, val, hm[2];
-    static const int dir[4] = { -1, 1, -TS, TS };
+    const int dir[4] = { -1, 1, -width, width };
     unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
-    ushort (*rgb)[TS][TS][3], (*rix1)[3], (*rix0)[3];
+    ushort (*rgb)[TS][width][3], (*rix1)[3], (*rix0)[3];
     union rgbpix * pix;
-    short (*lab)[TS][TS][3], (*lix)[3];
-    char (*homo)[TS][TS];
-    rgb  = (ushort(*)[TS][TS][3])buffer;
-    lab  = (short (*)[TS][TS][3])(buffer + 12*TS*TS);
-    homo = (char  (*)[TS][TS])(buffer + 24*TS*TS);
+    short (*lab)[TS][width][3], (*lix)[3];
+    char (*homo)[TS][width];
+    rgb  = (ushort(*)[TS][width][3])buffer;
+    lab  = (short (*)[TS][width][3])(buffer + 12*width*TS);
+    homo = (char  (*)[TS][width])(buffer + 24*width*TS);
 
-
+    const int left=2;
 
     /*  Interpolate gren horz&vert, red and blue, and convert to CIELab:  */
     //do the first two rows of green first.
     //then one green, and rgb through the tile.. this because R/B needs down-right green value
     for (row=top; row < top+2 && row < height-2; row++) {
         col = left + (FC(row,left) & 1);
-        for (c = FC(row,col); col < left+TS && col < width-2; col+=2) {
+        for (c = FC(row,col); col < width-2; col+=2) {
             pix = (union rgbpix*)image + row*width+col;
             val = ((pix[-1].g + pix[0].c[c] + pix[1].g) * 2 - pix[-2].c[c] - pix[2].c[c]) >> 2;
             rgb[0][row-top][col-left][1] = ULIM(val,pix[-1].g,pix[1].g);
@@ -133,7 +133,7 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
             rgb[0][row-top][1][1] = ULIM(val,pix[-1].g,pix[1].g);
             val = ((pix[-width].g + pix[0].c[c1] + pix[width].g) * 2 - pix[-2*width].c[c1] - pix[2*width].c[c1]) >> 2;
             rgb[1][row-top][1][1] = ULIM(val,pix[-width].g,pix[width].g);
-            for (col=left+1; col < left+TS-1 && col < width-3; col+=2) {
+            for (col=left+1; col < width-3; col+=2) {
                 pix = (union rgbpix*)image + rowx*width+col;
 
                 union rgbpix rix0_0,rix0_r;
@@ -154,16 +154,16 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
                 signed rix1_dr = ULIM(val,pix[2].g,pix[2*width+2].g);
 
 
-                signed rix0_u = rix0[-TS][1];
-                signed rix1_u = rix1[-TS][1];
-                signed rix0_ur = rix0[-TS+2][1];
-                signed rix1_ur = rix1[-TS+2][1];
+                signed rix0_u = rix0[-width][1];
+                signed rix1_u = rix1[-width][1];
+                signed rix0_ur = rix0[-width+2][1];
+                signed rix1_ur = rix1[-width+2][1];
                 signed rix0_l = rix0[-1][1];
                 signed rix1_l = rix1[-1][1];
                 rix0_r.g = rix0[1][1];
                 rix1_r.g = rix1[1][1];
-                signed rix0_d = rix0[TS][1];
-                signed rix1_d = rix1[TS][1];
+                signed rix0_d = rix0[width][1];
+                signed rix1_d = rix1[width][1];
 
                 signed rix0_ud = rix0_u + rix0_d;
                 signed rix1_ud = rix1_u + rix1_d;
@@ -190,8 +190,8 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
                 memcpy(&rix0[1],&rix0_r,6);
                 memcpy(&rix1[0],&rix1_0,6);
                 memcpy(&rix1[1],&rix1_r,6);
-                rix0[TS+2][1] = rix0_dr;
-                rix1[TS+2][1] = rix1_dr;
+                rix0[width+2][1] = rix0_dr;
+                rix1[width+2][1] = rix1_dr;
             }
         } else {
             int c1 = FC(rowx,left+1),
@@ -203,7 +203,7 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
             rgb[1][row-top][0][1] = ULIM(val,pix[-width].g,pix[width].g);
 
 
-            for (col=left+1; col < left+TS-1 && col < width-3; col+=2) {
+            for (col=left+1; col < width-3; col+=2) {
                 pix = (union rgbpix*)image + rowx*width+col;
 
                 union rgbpix rix0_0,rix0_r;
@@ -227,16 +227,16 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
 
                 signed pix_udr = pix_dr+pix_ur;
 
-                signed rix0_ul = rix0[-TS-1][1];
-                signed rix1_ul = rix1[-TS-1][1];
-                signed rix0_ur = rix0[-TS+1][1];
-                signed rix1_ur = rix1[-TS+1][1];
+                signed rix0_ul = rix0[-width-1][1];
+                signed rix1_ul = rix1[-width-1][1];
+                signed rix0_ur = rix0[-width+1][1];
+                signed rix1_ur = rix1[-width+1][1];
                 rix0_0.g = rix0[0][1];
                 rix1_0.g = rix1[0][1];
                 signed rix0_rr = rix0[2][1];
                 signed rix1_rr = rix1[2][1];
-                signed rix0_dl = rix0[TS-1][1];
-                signed rix1_dl = rix1[TS-1][1];
+                signed rix0_dl = rix0[width-1][1];
+                signed rix1_dl = rix1[width-1][1];
 
                 signed rix0_udr = rix0_dr+rix0_ur;
                 signed rix1_udr = rix1_dr+rix1_ur;
@@ -265,16 +265,16 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
                 memcpy(&rix0[1],&rix0_r,6);
                 memcpy(&rix1[0],&rix1_0,6);
                 memcpy(&rix1[1],&rix1_r,6);
-                rix0[TS+1][1] = rix0_dr;
-                rix1[TS+1][1] = rix1_dr;
+                rix0[width+1][1] = rix0_dr;
+                rix1[width+1][1] = rix1_dr;
             }
         }
     }
 /*  Build homogeneity maps from the CIELab images:    */
-    memset (homo, 0, 2*TS*TS);
+    memset (homo, 0, 2*width*TS);
     for (row=top+2; row < top+TS-2 && row < height-4; row++) {
         tr = row-top;
-        for (col=left+2; col < left+TS-2 && col < width-4; col++) {
+        for (col=left+2; col < width-4; col++) {
             tc = col-left;
             for (d=0; d < 2; d++) {
                 lix = &lab[d][tr][tc];
@@ -301,7 +301,7 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
 /*  Combine the most homogenous pixels for the final result:  */
     for (row=top+3; row < top+TS-3 && row < height-5; row++) {
         tr = row-top;
-        for (col=left+3; col < left+TS-3 && col < width-5; col++) {
+        for (col=left+3; col < width-5; col++) {
             tc = col-left;
             for (d=0; d < 2; d++)
                 for (hm[d]=0, i=tr-1; i <= tr+1; i++)
@@ -338,10 +338,9 @@ static uint64_t timediff(const struct timespec * start)
 
 #define NUM_CHUNKS 4
 void * ahd_interpolate_worker(void*args) {
-    signed left;
     unsigned top;
     unsigned chunk = (unsigned)(uintptr_t)args;
-    char * buffer = (char *) malloc (26*TS*TS);
+    char * buffer = (char *) malloc (26*width*TS);
 
     if (!buffer) {
         fprintf(stderr, "memory alloc error, %s\n",__FUNCTION__);
@@ -352,8 +351,7 @@ void * ahd_interpolate_worker(void*args) {
     else top = height/NUM_CHUNKS * chunk;
 
     for (; top < height/NUM_CHUNKS*(chunk+1); top += TS-6)
-        for (left=2; left < width-5; left += TS-6)
-            ahd_interpolate_tile(top,left,buffer);
+        ahd_interpolate_tile(top,buffer);
 
     free (buffer);
     return NULL;
