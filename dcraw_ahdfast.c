@@ -92,20 +92,31 @@ union rgbpix {
     };
 };
 
+union hvrgbpix {
+    struct {
+        union rgbpix h;
+        union rgbpix v;
+    };
+};
+
 void ahd_interpolate_tile(int top, char * buffer)
 {
     int i, j, row, col, tr, tc, c, d, val, hm[2];
     const int dir[4] = { -1, 1, -width, width };
     unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
-    ushort (*rgb)[TS][width][3], (*rix1)[3], (*rix0)[3];
+    union hvrgbpix (*rgb)[width] = (union hvrgbpix (*)[width])buffer;
+    union hvrgbpix *rix;
     union rgbpix * pix;
-    short (*lab)[TS][width][3], (*lix)[3];
+    short (*lab)[TS][width][4], (*lix)[4];
     char (*homo)[TS][width];
-    rgb  = (ushort(*)[TS][width][3])buffer;
-    lab  = (short (*)[TS][width][3])(buffer + 12*width*TS);
-    homo = (char  (*)[TS][width])(buffer + 24*width*TS);
+    lab  = (short (*)[TS][width][4])(buffer + 16*width*TS);
+    homo = (char  (*)[TS][width])(buffer + 32*width*TS);
 
     const int left=2;
+
+    if ((uintptr_t)(image+top*width)&0xf || (uintptr_t)buffer&0xf) {
+        fprintf(stderr, "unaligned buffers defeat speed!\n"); abort();
+    }
 
     /*  Interpolate gren horz&vert, red and blue, and convert to CIELab:  */
     //do the first two rows of green first.
@@ -115,9 +126,9 @@ void ahd_interpolate_tile(int top, char * buffer)
         for (c = FC(row,col); col < width-2; col+=2) {
             pix = (union rgbpix*)image + row*width+col;
             val = ((pix[-1].g + pix[0].c[c] + pix[1].g) * 2 - pix[-2].c[c] - pix[2].c[c]) >> 2;
-            rgb[0][row-top][col-left][1] = ULIM(val,pix[-1].g,pix[1].g);
+            rgb[row-top][col-left].h.g = ULIM(val,pix[-1].g,pix[1].g);
             val = ((pix[-width].g + pix[0].c[c] + pix[width].g) * 2 - pix[-2*width].c[c] - pix[2*width].c[c]) >> 2;
-            rgb[1][row-top][col-left][1] = ULIM(val,pix[-width].g,pix[width].g);
+            rgb[row-top][col-left].v.g = ULIM(val,pix[-width].g,pix[width].g);
         }
     }
 
@@ -130,17 +141,16 @@ void ahd_interpolate_tile(int top, char * buffer)
 
             pix = (union rgbpix*)image + row*width+left+1;
             val = ((pix[-1].g + pix[0].c[c1] + pix[1].g) * 2 - pix[-2].c[c1] - pix[2].c[c1]) >> 2;
-            rgb[0][row-top][1][1] = ULIM(val,pix[-1].g,pix[1].g);
+            rgb[row-top][1].h.g = ULIM(val,pix[-1].g,pix[1].g);
             val = ((pix[-width].g + pix[0].c[c1] + pix[width].g) * 2 - pix[-2*width].c[c1] - pix[2*width].c[c1]) >> 2;
-            rgb[1][row-top][1][1] = ULIM(val,pix[-width].g,pix[width].g);
+            rgb[row-top][1].v.g = ULIM(val,pix[-width].g,pix[width].g);
             for (col=left+1; col < width-3; col+=2) {
                 pix = (union rgbpix*)image + rowx*width+col;
 
                 union rgbpix rix0_0,rix0_r;
                 union rgbpix rix1_0,rix1_r;
 
-                rix0 = &rgb[0][rowx-top][col-left];
-                rix1 = &rgb[1][rowx-top][col-left];
+                rix = &rgb[rowx-top][col-left];
 
                 signed pix_ud = pix[-width].c[c1] + pix[width].c[c1];
                 signed pix_diag = pix[-width].c[c1] + pix[-width+2].c[c1];
@@ -154,16 +164,16 @@ void ahd_interpolate_tile(int top, char * buffer)
                 signed rix1_dr = ULIM(val,pix[2].g,pix[2*width+2].g);
 
 
-                signed rix0_u = rix0[-width][1];
-                signed rix1_u = rix1[-width][1];
-                signed rix0_ur = rix0[-width+2][1];
-                signed rix1_ur = rix1[-width+2][1];
-                signed rix0_l = rix0[-1][1];
-                signed rix1_l = rix1[-1][1];
-                rix0_r.g = rix0[1][1];
-                rix1_r.g = rix1[1][1];
-                signed rix0_d = rix0[width][1];
-                signed rix1_d = rix1[width][1];
+                signed rix0_u = rix[-width].h.g;
+                signed rix1_u = rix[-width].v.g;
+                signed rix0_ur = rix[-width+2].h.g;
+                signed rix1_ur = rix[-width+2].v.g;
+                signed rix0_l = rix[-1].h.g;
+                signed rix1_l = rix[-1].v.g;
+                rix0_r.g = rix[1].h.g;
+                rix1_r.g = rix[1].v.g;
+                signed rix0_d = rix[width].h.g;
+                signed rix1_d = rix[width].v.g;
 
                 signed rix0_ud = rix0_u + rix0_d;
                 signed rix1_ud = rix1_u + rix1_d;
@@ -186,21 +196,21 @@ void ahd_interpolate_tile(int top, char * buffer)
                 cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
                 cielab (rix1_0.c,lab[1][rowx-top][col-left]);
                 cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
-                memcpy(&rix0[0],&rix0_0,6);
-                memcpy(&rix0[1],&rix0_r,6);
-                memcpy(&rix1[0],&rix1_0,6);
-                memcpy(&rix1[1],&rix1_r,6);
-                rix0[width+2][1] = rix0_dr;
-                rix1[width+2][1] = rix1_dr;
+                memcpy(&rix[0].h,&rix0_0,6);
+                memcpy(&rix[0].v,&rix1_0,6);
+                memcpy(&rix[1].h,&rix0_r,6);
+                memcpy(&rix[1].v,&rix1_r,6);
+                rix[width+2].h.g = rix0_dr;
+                rix[width+2].v.g = rix1_dr;
             }
         } else {
             int c1 = FC(rowx,left+1),
                 c2 = FC(rowx+1,left+2);
             pix = (union rgbpix*)image + row*width+left;
             val = ((pix[-1].g + pix[0].c[c2] + pix[1].g) * 2 - pix[-2].c[c2] - pix[2].c[c2]) >> 2;
-            rgb[0][row-top][0][1] = ULIM(val,pix[-1].g,pix[1].g);
+            rgb[row-top][0].h.g = ULIM(val,pix[-1].g,pix[1].g);
             val = ((pix[-width].g + pix[0].c[c2] + pix[width].g) * 2 - pix[-2*width].c[c2] - pix[2*width].c[c2]) >> 2;
-            rgb[1][row-top][0][1] = ULIM(val,pix[-width].g,pix[width].g);
+            rgb[row-top][0].v.g = ULIM(val,pix[-width].g,pix[width].g);
 
 
             for (col=left+1; col < width-3; col+=2) {
@@ -209,8 +219,7 @@ void ahd_interpolate_tile(int top, char * buffer)
                 union rgbpix rix0_0,rix0_r;
                 union rgbpix rix1_0,rix1_r;
 
-                rix0 = &rgb[0][rowx-top][col-left];
-                rix1 = &rgb[1][rowx-top][col-left];
+                rix = &rgb[rowx-top][col-left];
 
                 signed pix_diag = pix[-width-1].c[c2] + pix[-width+1].c[c2];
                 signed pix_ur = pix[-width+1].c[c2];
@@ -227,16 +236,16 @@ void ahd_interpolate_tile(int top, char * buffer)
 
                 signed pix_udr = pix_dr+pix_ur;
 
-                signed rix0_ul = rix0[-width-1][1];
-                signed rix1_ul = rix1[-width-1][1];
-                signed rix0_ur = rix0[-width+1][1];
-                signed rix1_ur = rix1[-width+1][1];
-                rix0_0.g = rix0[0][1];
-                rix1_0.g = rix1[0][1];
-                signed rix0_rr = rix0[2][1];
-                signed rix1_rr = rix1[2][1];
-                signed rix0_dl = rix0[width-1][1];
-                signed rix1_dl = rix1[width-1][1];
+                signed rix0_ul = rix[-width-1].h.g;
+                signed rix1_ul = rix[-width-1].v.g;
+                signed rix0_ur = rix[-width+1].h.g;
+                signed rix1_ur = rix[-width+1].v.g;
+                rix0_0.g = rix[0].h.g;
+                rix1_0.g = rix[0].v.g;
+                signed rix0_rr = rix[2].h.g;
+                signed rix1_rr = rix[2].v.g;
+                signed rix0_dl = rix[width-1].h.g;
+                signed rix1_dl = rix[width-1].v.g;
 
                 signed rix0_udr = rix0_dr+rix0_ur;
                 signed rix1_udr = rix1_dr+rix1_ur;
@@ -261,12 +270,12 @@ void ahd_interpolate_tile(int top, char * buffer)
                 cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
                 cielab (rix1_0.c,lab[1][rowx-top][col-left]);
                 cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
-                memcpy(&rix0[0],&rix0_0,6);
-                memcpy(&rix0[1],&rix0_r,6);
-                memcpy(&rix1[0],&rix1_0,6);
-                memcpy(&rix1[1],&rix1_r,6);
-                rix0[width+1][1] = rix0_dr;
-                rix1[width+1][1] = rix1_dr;
+                memcpy(&rix[0].h,&rix0_0,6);
+                memcpy(&rix[0].v,&rix1_0,6);
+                memcpy(&rix[1].h,&rix0_r,6);
+                memcpy(&rix[1].v,&rix1_r,6);
+                rix[width+1].h.g = rix0_dr;
+                rix[width+1].v.g = rix1_dr;
             }
         }
     }
@@ -308,9 +317,9 @@ void ahd_interpolate_tile(int top, char * buffer)
                     for (j=tc-1; j <= tc+1; j++)
                         hm[d] += homo[d][i][j];
             if (hm[0] != hm[1])
-                FORC3 image[row*width+col][c] = rgb[hm[1] > hm[0]][tr][tc][c];
+                FORC3 image[row*width+col][c] = rgb[tr][tc].h.c[c + (hm[1] > hm[0])*4];
             else
-                FORC3 image[row*width+col][c] = (rgb[0][tr][tc][c] + rgb[1][tr][tc][c]) >> 1;
+                FORC3 image[row*width+col][c] = (rgb[tr][tc].h.c[c] + rgb[tr][tc].v.c[c]) >> 1;
         }
     }
 }
@@ -340,7 +349,7 @@ static uint64_t timediff(const struct timespec * start)
 void * ahd_interpolate_worker(void*args) {
     unsigned top;
     unsigned chunk = (unsigned)(uintptr_t)args;
-    char * buffer = (char *) malloc (26*width*TS);
+    char * buffer = (char *) malloc (34*width*TS);
 
     if (!buffer) {
         fprintf(stderr, "memory alloc error, %s\n",__FUNCTION__);
