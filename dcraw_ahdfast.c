@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <pthread.h>
+#include <math.h>
 #if !defined(ushort)
 #define ushort unsigned short
 #endif
@@ -29,7 +30,55 @@ extern const int verbose;
 #define _(x) x
 void border_interpolate (int border);
 
-void cielab (ushort rgb[3], short lab[3]);
+
+extern const float d65_white[3];
+extern const double xyz_rgb[3][3];
+extern float rgb_cam[3][4];
+extern unsigned colors;
+float cielab_cbrt[0x10000], cielab_xyz_cam[3][4];
+static void cielab_init()
+{
+    unsigned j;
+    int i, k;
+    float r;
+    for (i=0; i < 0x10000; i++) {
+        r = i / 65535.0;
+        cielab_cbrt[i] = r > 0.008856 ? pow(r,1/3.0) : 7.787*r + 16/116.0;
+    }
+    for (i=0; i < 3; i++)
+        for (j=0; j < colors; j++)
+            for (cielab_xyz_cam[i][j] = k=0; k < 3; k++)
+                cielab_xyz_cam[i][j] += xyz_rgb[i][k] * rgb_cam[k][j] / d65_white[i];
+}
+
+static void cielab (ushort rgb[3], short lab[3])
+{
+    unsigned c;
+    float xyz[3];
+
+    xyz[0] = xyz[1] = xyz[2] = 0.5;
+    for(c=0; c<colors; c++) {
+        xyz[0] += cielab_xyz_cam[0][c] * rgb[c];
+        xyz[1] += cielab_xyz_cam[1][c] * rgb[c];
+        xyz[2] += cielab_xyz_cam[2][c] * rgb[c];
+    }
+    if (unlikely(xyz[0]>0xffff)) xyz[0]=0xffff;
+    else if (unlikely(xyz[0]<0)) xyz[0]=0;
+    if (unlikely(xyz[1]>0xffff)) xyz[1]=0xffff;
+    else if (unlikely(xyz[1]<0)) xyz[1]=0;
+    if (unlikely(xyz[2]>0xffff)) xyz[2]=0xffff;
+    else if (unlikely(xyz[2]<0)) xyz[2]=0;
+
+    xyz[0] = cielab_cbrt[(int) xyz[0]];
+    xyz[1] = cielab_cbrt[(int) xyz[1]];
+    xyz[2] = cielab_cbrt[(int) xyz[2]];
+    lab[0] = 64 * (116 * xyz[1] - 16);
+    lab[1] = 64 * 500 * (xyz[0] - xyz[1]);
+    lab[2] = 64 * 200 * (xyz[1] - xyz[2]);
+}
+
+
+
 
 void ahd_interpolate_tile(int top,int left, char * buffer)
 {
@@ -188,7 +237,7 @@ void ahd_interpolate_fast(void)
     if (verbose) fprintf (stderr,_("AHD interpolation...\n"));
 
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
-    cielab (0,0);
+    cielab_init();
     border_interpolate(5);
 
 #ifdef THREADED
