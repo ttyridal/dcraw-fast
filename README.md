@@ -5,13 +5,14 @@ optimising code for fun and profit
 ### Intro
 
 If you’ve ever done some raw-image processing on linux, you’ve probably
-meet dcraw or one of it’s derivatives. You’ve probably also noticed that it is
+met dcraw or one of it’s derivatives. You’ve probably also noticed that it is
 unbearably slow, compared to closed source variants on osx or windows.
 On a 4 core i7-2600K, 3.4Ghz, developing a 5202x3465 cr2 raw 
-(eos 550d) takes a full 3.3s. After these optimization that's reduced to 1.5s!
+(eos 550d) takes a full 3.3s.
 
 Thankfully dcraw is open source, and being a software geek I felt the need to
-at least have look.
+at least have look.  After applying the optimizations documented here, the developing time
+is reduced to 1.5s.
 
 ### Mapping out the problem
 Without any knowledge to the dcraw code or behaviour (except that the end result
