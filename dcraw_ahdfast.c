@@ -14,7 +14,6 @@
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 #define LIM(x,min,max) MAX(min,MIN(x,max))
 #define ULIM(x,y,z) ((y) < (z) ? LIM(x,y,z) : LIM(x,z,y))
-#define CLIP(x) LIM(x,0,65535)
 #define FORC(cnt) for (c=0; c < cnt; c++)
 #define FORC3 FORC(3)
 #define FC(row,col) \
@@ -70,7 +69,9 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
                     c = FC(row+1,col);
                     val = pix[0][1] + (( pix[-1][2-c] + pix[1][2-c]
                                          - rix[-1][1] - rix[1][1] ) >> 1);
-                    rix[0][2-c] = CLIP(val);
+                    rix[0][2-c] = val;
+                    if (unlikely(val<0)) rix[0][2-c]=0;
+                    else if (unlikely(val>0xffff)) rix[0][2-c]=0xffff;
                     val = pix[0][1] + (( pix[-width][c] + pix[width][c]
                                          - rix[-TS][1] - rix[TS][1] ) >> 1);
                 } else
@@ -78,7 +79,10 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
                                          + pix[+width-1][c] + pix[+width+1][c]
                                          - rix[-TS-1][1] - rix[-TS+1][1]
                                          - rix[+TS-1][1] - rix[+TS+1][1] + 1) >> 2);
-                rix[0][c] = CLIP(val);
+                rix[0][c] = val;
+                if (unlikely(val<0)) rix[0][c]=0;
+                else if (unlikely(val>0xffff)) rix[0][c]=0xffff;
+
                 c = FC(row,col);
                 rix[0][c] = pix[0][c];
                 cielab (rix[0],lix[0]);
