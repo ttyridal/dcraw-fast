@@ -15,6 +15,7 @@
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 #define LIM(x,min,max) MAX(min,MIN(x,max))
 #define ULIM(x,y,z) ((y) < (z) ? LIM(x,y,z) : LIM(x,z,y))
+#define MOV_CLAMP(d,s) {(d)=(s); if(unlikely((s)<0)) (d)=0; else if(unlikely((s)>0xffff)) (d)=0xffff; }
 #define FORC(cnt) for (c=0; c < cnt; c++)
 #define FORC3 FORC(3)
 #define FC(row,col) \
@@ -80,12 +81,24 @@ static void cielab (ushort rgb[3], short lab[3])
 
 
 
+union rgbpix {
+    uint64_t P;
+    ushort c[4];
+    struct {
+        ushort r;
+        ushort g;
+        ushort b;
+        ushort g1;
+    };
+};
+
 void ahd_interpolate_tile(int top,int left, char * buffer)
 {
     int i, j, row, col, tr, tc, c, d, val, hm[2];
     static const int dir[4] = { -1, 1, -TS, TS };
     unsigned ldiff[2][4], abdiff[2][4], leps, abeps;
-    ushort (*rgb)[TS][TS][3], (*rix)[3], (*pix)[4];
+    ushort (*rgb)[TS][TS][3], (*rix1)[3], (*rix0)[3];
+    union rgbpix * pix;
     short (*lab)[TS][TS][3], (*lix)[3];
     char (*homo)[TS][TS];
     rgb  = (ushort(*)[TS][TS][3])buffer;
@@ -94,49 +107,170 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
 
 
 
-/*  Interpolate green horizontally and vertically:		*/
-    for (row=top; row < top+TS && row < height-2; row++) {
+    /*  Interpolate gren horz&vert, red and blue, and convert to CIELab:  */
+    //do the first two rows of green first.
+    //then one green, and rgb through the tile.. this because R/B needs down-right green value
+    for (row=top; row < top+2 && row < height-2; row++) {
         col = left + (FC(row,left) & 1);
         for (c = FC(row,col); col < left+TS && col < width-2; col+=2) {
-            pix = image + row*width+col;
-            val = ((pix[-1][1] + pix[0][c] + pix[1][1]) * 2
-                   - pix[-2][c] - pix[2][c]) >> 2;
-            rgb[0][row-top][col-left][1] = ULIM(val,pix[-1][1],pix[1][1]);
-            val = ((pix[-width][1] + pix[0][c] + pix[width][1]) * 2
-                   - pix[-2*width][c] - pix[2*width][c]) >> 2;
-            rgb[1][row-top][col-left][1] = ULIM(val,pix[-width][1],pix[width][1]);
+            pix = (union rgbpix*)image + row*width+col;
+            val = ((pix[-1].g + pix[0].c[c] + pix[1].g) * 2 - pix[-2].c[c] - pix[2].c[c]) >> 2;
+            rgb[0][row-top][col-left][1] = ULIM(val,pix[-1].g,pix[1].g);
+            val = ((pix[-width].g + pix[0].c[c] + pix[width].g) * 2 - pix[-2*width].c[c] - pix[2*width].c[c]) >> 2;
+            rgb[1][row-top][col-left][1] = ULIM(val,pix[-width].g,pix[width].g);
         }
     }
-/*  Interpolate red and blue, and convert to CIELab:		*/
-    for (d=0; d < 2; d++)
-        for (row=top+1; row < top+TS-1 && row < height-3; row++)
-            for (col=left+1; col < left+TS-1 && col < width-3; col++) {
-                pix = image + row*width+col;
-                rix = &rgb[d][row-top][col-left];
-                lix = &lab[d][row-top][col-left];
-                if ((c = 2 - FC(row,col)) == 1) {
-                    c = FC(row+1,col);
-                    val = pix[0][1] + (( pix[-1][2-c] + pix[1][2-c]
-                                         - rix[-1][1] - rix[1][1] ) >> 1);
-                    rix[0][2-c] = val;
-                    if (unlikely(val<0)) rix[0][2-c]=0;
-                    else if (unlikely(val>0xffff)) rix[0][2-c]=0xffff;
-                    val = pix[0][1] + (( pix[-width][c] + pix[width][c]
-                                         - rix[-TS][1] - rix[TS][1] ) >> 1);
-                } else
-                    val = rix[0][1] + (( pix[-width-1][c] + pix[-width+1][c]
-                                         + pix[+width-1][c] + pix[+width+1][c]
-                                         - rix[-TS-1][1] - rix[-TS+1][1]
-                                         - rix[+TS-1][1] - rix[+TS+1][1] + 1) >> 2);
-                rix[0][c] = val;
-                if (unlikely(val<0)) rix[0][c]=0;
-                else if (unlikely(val>0xffff)) rix[0][c]=0xffff;
 
-                c = FC(row,col);
-                rix[0][c] = pix[0][c];
-                cielab (rix[0],lix[0]);
+    for (; row < top+TS && row < height-2; row++) {
+        int rowx = row-1;
+
+        if (FC(rowx,left+1)==1) {
+            int c1 = FC(rowx+1,left+1),
+                c2 = FC(rowx,left+2);
+
+            pix = (union rgbpix*)image + row*width+left+1;
+            val = ((pix[-1].g + pix[0].c[c1] + pix[1].g) * 2 - pix[-2].c[c1] - pix[2].c[c1]) >> 2;
+            rgb[0][row-top][1][1] = ULIM(val,pix[-1].g,pix[1].g);
+            val = ((pix[-width].g + pix[0].c[c1] + pix[width].g) * 2 - pix[-2*width].c[c1] - pix[2*width].c[c1]) >> 2;
+            rgb[1][row-top][1][1] = ULIM(val,pix[-width].g,pix[width].g);
+            for (col=left+1; col < left+TS-1 && col < width-3; col+=2) {
+                pix = (union rgbpix*)image + rowx*width+col;
+
+                union rgbpix rix0_0,rix0_r;
+                union rgbpix rix1_0,rix1_r;
+
+                rix0 = &rgb[0][rowx-top][col-left];
+                rix1 = &rgb[1][rowx-top][col-left];
+
+                signed pix_ud = pix[-width].c[c1] + pix[width].c[c1];
+                signed pix_diag = pix[-width].c[c1] + pix[-width+2].c[c1];
+                signed pix_lr = pix[-1].c[c2] + pix[1].c[c2];
+                rix1_r.c[c2] = rix0_r.c[c2]  = pix[1].c[c2];
+                rix1_0.g = rix0_0.g = pix[0].g;
+                pix_diag += pix[width].c[c1] + pix[width+2].c[c1];
+                val = ((pix[width+1].g + pix[width+2].c[c1] + pix[width+3].g) * 2 - pix[width].c[c1] - pix[width+4].c[c1]) >> 2;
+                signed rix0_dr = ULIM(val,pix[width+1].g,pix[width+3].g);
+                val = ((pix[2].g + pix[width+2].c[c1] + pix[2*width+2].g) * 2 - pix[-width+2].c[c1] - pix[3*width+2].c[c1]) >> 2;
+                signed rix1_dr = ULIM(val,pix[2].g,pix[2*width+2].g);
+
+
+                signed rix0_u = rix0[-TS][1];
+                signed rix1_u = rix1[-TS][1];
+                signed rix0_ur = rix0[-TS+2][1];
+                signed rix1_ur = rix1[-TS+2][1];
+                signed rix0_l = rix0[-1][1];
+                signed rix1_l = rix1[-1][1];
+                rix0_r.g = rix0[1][1];
+                rix1_r.g = rix1[1][1];
+                signed rix0_d = rix0[TS][1];
+                signed rix1_d = rix1[TS][1];
+
+                signed rix0_ud = rix0_u + rix0_d;
+                signed rix1_ud = rix1_u + rix1_d;
+
+                val = rix0_0.g + (( pix_lr - rix0_l - rix0_r.g ) >> 1);
+                MOV_CLAMP(rix0_0.c[c2],val);
+                val = rix0_0.g + (( pix_lr - rix1_l - rix1_r.g) >> 1);
+                MOV_CLAMP(rix1_0.c[c2], val);
+                val = rix0_0.g + (( pix_ud - rix0_ud ) >> 1);
+                MOV_CLAMP(rix0_0.c[c1],val);
+                val = rix0_0.g + (( pix_ud - rix1_ud ) >> 1);
+                MOV_CLAMP(rix1_0.c[c1],val);
+
+                val = rix0_r.g + (( pix_diag - rix0_ud - rix0_ur - rix0_dr + 1) >> 2);
+                MOV_CLAMP(rix0_r.c[c1],val);
+                val = rix1_r.g + (( pix_diag - rix1_ud - rix1_ur - rix1_dr + 1) >> 2);
+                MOV_CLAMP(rix1_r.c[c1],val);
+
+                cielab (rix0_0.c,lab[0][rowx-top][col-left]);
+                cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
+                cielab (rix1_0.c,lab[1][rowx-top][col-left]);
+                cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
+                memcpy(&rix0[0],&rix0_0,6);
+                memcpy(&rix0[1],&rix0_r,6);
+                memcpy(&rix1[0],&rix1_0,6);
+                memcpy(&rix1[1],&rix1_r,6);
+                rix0[TS+2][1] = rix0_dr;
+                rix1[TS+2][1] = rix1_dr;
             }
-/*  Build homogeneity maps from the CIELab images:		*/
+        } else {
+            int c1 = FC(rowx,left+1),
+                c2 = FC(rowx+1,left+2);
+            pix = (union rgbpix*)image + row*width+left;
+            val = ((pix[-1].g + pix[0].c[c2] + pix[1].g) * 2 - pix[-2].c[c2] - pix[2].c[c2]) >> 2;
+            rgb[0][row-top][0][1] = ULIM(val,pix[-1].g,pix[1].g);
+            val = ((pix[-width].g + pix[0].c[c2] + pix[width].g) * 2 - pix[-2*width].c[c2] - pix[2*width].c[c2]) >> 2;
+            rgb[1][row-top][0][1] = ULIM(val,pix[-width].g,pix[width].g);
+
+
+            for (col=left+1; col < left+TS-1 && col < width-3; col+=2) {
+                pix = (union rgbpix*)image + rowx*width+col;
+
+                union rgbpix rix0_0,rix0_r;
+                union rgbpix rix1_0,rix1_r;
+
+                rix0 = &rgb[0][rowx-top][col-left];
+                rix1 = &rgb[1][rowx-top][col-left];
+
+                signed pix_diag = pix[-width-1].c[c2] + pix[-width+1].c[c2];
+                signed pix_ur = pix[-width+1].c[c2];
+                rix1_0.c[c1] = rix0_0.c[c1] = pix[0].c[c1];
+                signed pix_lr = pix[0].c[c1] + pix[2].c[c1];
+                rix1_r.g = rix0_r.g = pix[1].g;
+                pix_diag += pix[width-1].c[c2] + pix[width+1].c[c2];
+                signed pix_dr = pix[width+1].c[c2];
+
+                val = ((pix[width].g + pix[width+1].c[c2] + pix[width+2].g) * 2 - pix[width-1].c[c2] - pix[width+3].c[c2]) >> 2;
+                signed rix0_dr = ULIM(val,pix[width].g,pix[width+2].g);
+                val = ((rix1_r.g + pix_dr + pix[2*width+1].g) * 2 - pix_ur - pix[3*width+1].c[c2]) >> 2;
+                signed rix1_dr = ULIM(val,pix[1].g,pix[2*width+1].g);
+
+                signed pix_udr = pix_dr+pix_ur;
+
+                signed rix0_ul = rix0[-TS-1][1];
+                signed rix1_ul = rix1[-TS-1][1];
+                signed rix0_ur = rix0[-TS+1][1];
+                signed rix1_ur = rix1[-TS+1][1];
+                rix0_0.g = rix0[0][1];
+                rix1_0.g = rix1[0][1];
+                signed rix0_rr = rix0[2][1];
+                signed rix1_rr = rix1[2][1];
+                signed rix0_dl = rix0[TS-1][1];
+                signed rix1_dl = rix1[TS-1][1];
+
+                signed rix0_udr = rix0_dr+rix0_ur;
+                signed rix1_udr = rix1_dr+rix1_ur;
+
+
+                val = rix0_r.g + (( pix_lr - rix0_0.g - rix0_rr ) >> 1);
+                MOV_CLAMP(rix0_r.c[c1], val);
+                val = rix0_r.g + (( pix_lr - rix1_0.g - rix1_rr ) >> 1);
+                MOV_CLAMP(rix1_r.c[c1], val);
+                val = rix0_r.g + ((pix_udr - rix0_udr ) >> 1);
+                MOV_CLAMP(rix0_r.c[c2], val);
+                val = rix0_r.g + ((pix_udr - rix1_udr ) >> 1);
+                MOV_CLAMP(rix1_r.c[c2], val);
+
+                val = rix0_0.g + ((pix_diag - rix0_ul - rix0_dl - rix0_udr + 1) >> 2);
+                MOV_CLAMP(rix0_0.c[c2],val);
+                val = rix1_0.g + ((pix_diag - rix1_ul - rix1_udr - rix1_dl + 1) >> 2);
+                MOV_CLAMP(rix1_0.c[c2],val);
+
+
+                cielab (rix0_0.c,lab[0][rowx-top][col-left]);
+                cielab (rix0_r.c,lab[0][rowx-top][col-left+1]);
+                cielab (rix1_0.c,lab[1][rowx-top][col-left]);
+                cielab (rix1_r.c,lab[1][rowx-top][col-left+1]);
+                memcpy(&rix0[0],&rix0_0,6);
+                memcpy(&rix0[1],&rix0_r,6);
+                memcpy(&rix1[0],&rix1_0,6);
+                memcpy(&rix1[1],&rix1_r,6);
+                rix0[TS+1][1] = rix0_dr;
+                rix1[TS+1][1] = rix1_dr;
+            }
+        }
+    }
+/*  Build homogeneity maps from the CIELab images:    */
     memset (homo, 0, 2*TS*TS);
     for (row=top+2; row < top+TS-2 && row < height-4; row++) {
         tr = row-top;
@@ -164,7 +298,7 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
 
         }
     }
-/*  Combine the most homogenous pixels for the final result:	*/
+/*  Combine the most homogenous pixels for the final result:  */
     for (row=top+3; row < top+TS-3 && row < height-5; row++) {
         tr = row-top;
         for (col=left+3; col < left+TS-3 && col < width-5; col++) {
@@ -176,8 +310,7 @@ void ahd_interpolate_tile(int top,int left, char * buffer)
             if (hm[0] != hm[1])
                 FORC3 image[row*width+col][c] = rgb[hm[1] > hm[0]][tr][tc][c];
             else
-                FORC3 image[row*width+col][c] =
-                    (rgb[0][tr][tc][c] + rgb[1][tr][tc][c]) >> 1;
+                FORC3 image[row*width+col][c] = (rgb[0][tr][tc][c] + rgb[1][tr][tc][c]) >> 1;
         }
     }
 }
