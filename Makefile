@@ -7,7 +7,7 @@ OPTIM:=-O4 -ffast-math  -ftree-vectorize
 
 LIBS:=-lm -pthread
 
-#DEFINES:=-DTHREADED
+DEFINES:=-DTHREADED
 
 IGNORE_WARNINGS=-Wno-clobbered \
 				-Wno-unused-result \

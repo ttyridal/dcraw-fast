@@ -156,7 +156,7 @@ static __m128i cielabv (union hvrgbpix rgb)
 
 void ahd_interpolate_tile(int top, char * buffer)
 {
-    int i, j, row, col, tr, tc, c, d, val, hm[2];
+    int row, col, tr, tc, c, val;
     const int dir[4] = { -1, 1, -width, width };
     __m128i ldiff[2], abdiff[2];
     union hvrgbpix (*rgb)[width] = (union hvrgbpix (*)[width])buffer;
@@ -164,9 +164,9 @@ void ahd_interpolate_tile(int top, char * buffer)
     union rgbpix * pix;
     union hvrgbpix (*lab)[width];
     short (*lix)[8];
-    char (*homo)[TS][width];
+    char (*homo)[width][2];
     lab  = (union hvrgbpix (*)[width])(buffer + 16*width*TS);
-    homo = (char  (*)[TS][width])(buffer + 32*width*TS);
+    homo = (char  (*)[width][2])(buffer + 32*width*TS);
 
     const int left=2;
 
@@ -366,7 +366,6 @@ void ahd_interpolate_tile(int top, char * buffer)
         }
     }
 /*  Build homogeneity maps from the CIELab images:    */
-    memset (homo, 0, 2*width*TS);
     for (row=top+2; row < top+TS-2 && row < height-4; row++) {
         tr = row-top;
         for (col=left+2; col < width-4; col++) {
@@ -438,26 +437,104 @@ void ahd_interpolate_tile(int top, char * buffer)
             t2 = _mm_add_epi32(t2, _mm_set_epi32(1,1,1,1));
 
             t3 = _mm_hadd_epi32(t3,t3);
-            t3 = _mm_hadd_epi32(t3,t3);
-
             t2 = _mm_hadd_epi32(t2,t2);
-            t2 = _mm_hadd_epi32(t2,t2);
+            t2 = _mm_hadd_epi32(t3,t2);
 
-            homo[0][tr][tc]+=_mm_extract_epi32(t3,0);
-            homo[1][tr][tc]+=_mm_extract_epi32(t2,0);
+            homo[tr][tc][0]=_mm_extract_epi32(t2,0);
+            homo[tr][tc][1]=_mm_extract_epi32(t2,2);
         }
     }
 /*  Combine the most homogenous pixels for the final result:  */
+    #define SHUF8(h,g,f,e,d,c,b,a) _mm_set_epi8(h*2+1,h*2,g*2+1,g*2,f*2+1,f*2,e*2+1,e*2,d*2+1,d*2,c*2+1,c*2,b*2+1,b*2,a*2+1,a*2)
+
+#define _MM_AVG_lo_epu16_NO_ROUND(r)_mm_packus_epi32(_mm_srai_epi32(_mm_add_epi32(_mm_unpacklo_epi16(r,_mm_setzero_si128()), _mm_unpackhi_epi16(r, _mm_setzero_si128())),1), _mm_setzero_si128())
+// because this buggar does a+b+1 /2 :(  _mm_avg_epu16(rgb[tr][tc+1].vec, _mm_shuffle_epi32(rgb[tr][tc+1].vec, _MM_SHUFFLE(0,0,3,2)));
+
     for (row=top+3; row < top+TS-3 && row < height-5; row++) {
         tr = row-top;
-        for (col=left+3; col < width-5; col++) {
+
+        // do the first one, so rest of line is aligned
+        col=left+3;
+        {
+            int hm[2],i;
             tc = col-left;
-            for (d=0; d < 2; d++)
+            for (int d=0; d < 2; d++)
                 for (hm[d]=0, i=tr-1; i <= tr+1; i++)
-                    for (j=tc-1; j <= tc+1; j++)
-                        hm[d] += homo[d][i][j];
+                    for (int j=tc-1; j <= tc+1; j++)
+                        hm[d] += homo[i][j][d];
             if (hm[0] != hm[1])
-                FORC3 image[row*width+col][c] = rgb[tr][tc].h.c[c + (hm[1] > hm[0])*4];
+                FORC3 image[row*width+col][c] = rgb[tr][tc].h.c[c+(hm[1] > hm[0])*4];
+            else
+                FORC3 image[row*width+col][c] = (rgb[tr][tc].h.c[c] + rgb[tr][tc].v.c[c]) >> 1;
+        }
+
+        for (col=left+4; col < width-8; col+=4) {
+            tc = col-left;
+            __m128i hm0,x;
+
+            __m128i up = _mm_lddqu_si128((__m128i*)&homo[tr-1][tc-1]);
+            __m128i here = _mm_lddqu_si128((__m128i*)&homo[tr][tc-1]);
+            __m128i down = _mm_lddqu_si128((__m128i*)&homo[tr+1][tc-1]);
+
+            here = _mm_add_epi8(_mm_add_epi8(here,up),down);     // p0 'p0 p1 'p1 p2 'p2 p3 'p3  p4 'p4 p5 'p5
+            __m128i here_ = _mm_shuffle_epi8(here, _mm_set_epi8(14,12,10,8, 6,4,2,0, 15,13,11,9, 7,5,3,1));
+            here = _mm_unpackhi_epi64(here_,_mm_setzero_si128());
+
+            here = _mm_cvtepi8_epi16(here);
+            here_ = _mm_cvtepi8_epi16(here_);
+            hm0 = _mm_hadd_epi16(here, here_); // p01  p23  p45  p67    'p01  'p23  'p45  'p67
+            hm0 = _mm_shuffle_epi8(hm0, SHUF8(6,5,5,4,2,1,1,0));
+            // p2   p1  p4   p3     'p2   'p1   'p4   'p3
+            x = _mm_unpacklo_epi64(_mm_shuffle_epi8(here, SHUF8(0,0,0,0,3,4,1,2)),
+                                   _mm_shuffle_epi8(here_, SHUF8(0,0,0,0,3,4,1,2)));
+            hm0 = _mm_add_epi16(hm0,x); //p012 p123 p234 p345 'p012 ....
+
+            x = _mm_unpackhi_epi64(hm0, _mm_setzero_si128());
+            __m128i hm1 = _mm_cmpeq_epi16(hm0,x); // eq0 eq1 eq2 eq3  xx xx xx xx
+            hm0 = _mm_cmpgt_epi16(x,hm0);
+            __m128i hm0_ = _mm_cvtepi16_epi64(_mm_srli_si128(hm0,4));
+            __m128i hm1_ = _mm_cvtepi16_epi64(_mm_srli_si128(hm1,4));
+            hm0 = _mm_cvtepi16_epi64(hm0);
+            hm1 = _mm_cvtepi16_epi64(hm1);
+
+            //TODO: there is actually a good opportunity for avx here
+            __m128i r1 = rgb[tr][tc].vec;
+            __m128i r2 = rgb[tr][tc+1].vec;
+            __m128i r3 = rgb[tr][tc+2].vec;
+            __m128i r4 = rgb[tr][tc+3].vec;
+#if 0 // can't do that if we should be 100% equal to original, mm_avg_epu16 is (a+b+1) >> 1
+            x = _mm_unpacklo_epi64(r1,r2);
+            r2 = _mm_unpackhi_epi64(r1,r2);
+            __m128i avg  = _mm_avg_epu16(x,r2);
+            __m128i vd = _mm_blendv_epi8(x,r2, hm0);
+#else
+            __m128i avg  = _mm_packus_epi32(
+                _mm_srai_epi32(_mm_add_epi32(_mm_unpacklo_epi16(r1,_mm_setzero_si128()), _mm_unpackhi_epi16(r1, _mm_setzero_si128())),1),
+                _mm_srai_epi32(_mm_add_epi32(_mm_unpacklo_epi16(r2,_mm_setzero_si128()), _mm_unpackhi_epi16(r2, _mm_setzero_si128())),1));
+            __m128i vd = _mm_blendv_epi8(_mm_unpacklo_epi64(r1,r2),_mm_unpackhi_epi64(r1,r2), hm0);
+
+            __m128i avg_  = _mm_packus_epi32(
+                _mm_srai_epi32(_mm_add_epi32(_mm_unpacklo_epi16(r3,_mm_setzero_si128()), _mm_unpackhi_epi16(r3, _mm_setzero_si128())),1),
+                _mm_srai_epi32(_mm_add_epi32(_mm_unpacklo_epi16(r4,_mm_setzero_si128()), _mm_unpackhi_epi16(r4, _mm_setzero_si128())),1));
+            __m128i vd_ = _mm_blendv_epi8(_mm_unpacklo_epi64(r3,r4),_mm_unpackhi_epi64(r3,r4), hm0_);
+#endif
+            r1 = _mm_blendv_epi8(vd,avg, hm1);
+            r2 = _mm_blendv_epi8(vd_,avg_, hm1_);
+
+            _mm_store_si128((__m128i*)image[row*width+col],r1);
+            _mm_store_si128((__m128i*)image[row*width+col+2],r2);
+
+        }
+        for (;col<width-5;col++)
+        {
+            int hm[2],i;
+            tc = col-left;
+            for (int d=0; d < 2; d++)
+                for (hm[d]=0, i=tr-1; i <= tr+1; i++)
+                    for (int j=tc-1; j <= tc+1; j++)
+                        hm[d] += homo[i][j][d];
+            if (hm[0] != hm[1])
+                FORC3 image[row*width+col][c] = rgb[tr][tc].h.c[c+(hm[1] > hm[0])*4];
             else
                 FORC3 image[row*width+col][c] = (rgb[tr][tc].h.c[c] + rgb[tr][tc].v.c[c]) >> 1;
         }
@@ -469,21 +546,6 @@ void ahd_interpolate_tile(int top, char * buffer)
    Adaptive Homogeneity-Directed interpolation is based on
    the work of Keigo Hirakawa, Thomas Parks, and Paul Lee.
  */
-static uint64_t timediff(const struct timespec * start)
-{
-    struct timespec end;
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
-
-    struct timespec temp;
-    if ((end.tv_nsec-start->tv_nsec)<0) {
-        temp.tv_sec = end.tv_sec-start->tv_sec-1;
-        temp.tv_nsec = 1000000000+end.tv_nsec-start->tv_nsec;
-    } else {
-        temp.tv_sec = end.tv_sec-start->tv_sec;
-        temp.tv_nsec = end.tv_nsec-start->tv_nsec;
-    }
-    return temp.tv_sec*1000000 + temp.tv_nsec/1000;
-}
 
 #define NUM_CHUNKS 4
 void * ahd_interpolate_worker(void*args) {
@@ -508,15 +570,13 @@ void * ahd_interpolate_worker(void*args) {
 
 void ahd_interpolate_fast(void)
 {
+//#define THREADED
 #ifdef THREADED
     pthread_t th[NUM_CHUNKS-1];
     pthread_attr_t tattr;
 #endif
-    struct timespec start;
-
     if (verbose) fprintf (stderr,_("AHD interpolation...\n"));
 
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
     cielab_init();
     border_interpolate(5);
 
@@ -537,6 +597,4 @@ void ahd_interpolate_fast(void)
     for(unsigned i=0; i<(sizeof th/sizeof th[0]) -1; i++)
         pthread_join(th[i],NULL);
 #endif
-
-    fprintf(stderr, "%15s %12" PRIu64 " us (1926200)\n","runtime",timediff(&start));
 }
